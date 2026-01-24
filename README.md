@@ -1,71 +1,51 @@
-# RAG Demo (Milvus + SentenceTransformers + OpenAI)
+# RAG From Scratch
 
 [中文 README](README.zh.md)
 
-## Overview
-This is a minimal end-to-end RAG demo that follows your architecture diagram:
-- Stage 1 (Ingestion): parse documents -> chunk -> embed -> store in Milvus
-- Stage 2 (Q&A): query embed -> search -> optional rerank -> prompt LLM -> answer + citations
+## What this repository is
+A small, runnable RAG (Retrieval-Augmented Generation) demo.
+It turns documents into a searchable knowledge base and answers questions with citations.
 
-## Architecture (Mapping to Diagram)
-- Document parsing: `rag/parsers/*` converts PDF/DOCX/Markdown/text to Markdown.
-- Chunking: `rag/chunking.py` splits Markdown by headings with overlap.
-- Embedding: `rag/embeddings.py` generates vectors with SentenceTransformers.
-- Vector store: `rag/vector_store.py` writes/reads Milvus (HNSW, inner product).
-- Retrieval: `rag/retriever.py` embeds query then searches Milvus.
-- Rerank (optional): `rag/rerank.py` uses a cross-encoder.
-- Answer: `rag/answer.py` builds context and calls the LLM.
-- CLI entrypoints: `scripts/ingest.py` and `scripts/ask.py`.
+## What it does
+- Ingests PDF/DOCX/Markdown/text files
+- Chunks content by headings with overlap
+- Creates embeddings using SentenceTransformers
+- Stores and searches vectors in Milvus (HNSW, inner product)
+- Optionally reranks with a cross-encoder
+- Generates answers with evidence snippets
 
-## Project Layout (File by File)
-- `.gitignore`: ignores caches, virtual envs, local data, Milvus DB.
-- `requirements.txt`: Python dependencies.
-- `data/`: local data folder (ignored by git, except `.gitkeep`).
-- `rag/__init__.py`: package exports.
-- `rag/config.py`: default configuration + env overrides.
-- `rag/parsers/__init__.py`: chooses parser based on file extension.
-- `rag/parsers/pdf_parser.py`: PDF -> Markdown.
-- `rag/parsers/docx_parser.py`: DOCX -> Markdown (headings/lists/paragraphs).
-- `rag/parsers/md_parser.py`: Markdown/text passthrough.
-- `rag/chunking.py`: heading-aware chunking + overlap.
-- `rag/embeddings.py`: embedding model wrapper.
-- `rag/vector_store.py`: Milvus collection + insert/search.
-- `rag/ingest.py`: ingestion pipeline (parse -> chunk -> embed -> insert).
-- `rag/retriever.py`: query embedding + vector search.
-- `rag/rerank.py`: cross-encoder reranker.
-- `rag/llm.py`: OpenAI Chat wrapper.
-- `rag/answer.py`: prompt/context builder + LLM call.
-- `scripts/ingest.py`: CLI for ingestion.
-- `scripts/ask.py`: CLI for Q&A (answer + evidence).
+## How it works (high level)
+1) Parse documents into Markdown
+2) Split into chunks and embed
+3) Store vectors in Milvus
+4) Embed the query and retrieve top matches
+5) (Optional) rerank results
+6) Build a prompt and generate an answer
 
-## Quickstart (Conda)
-> You said to use the `llm` conda environment for commands.
-
-1) Install deps
+## Quickstart
+1) Install dependencies
 ```bash
-conda run -n llm python -m pip install -r requirements.txt
+python -m pip install -r requirements.txt
 ```
 
 2) Set your OpenAI key (auto-loads `.env`)
 ```bash
-# Option A: .env
-echo 'OPENAI_API_KEY=...' > .env
-
-# Option B: shell export
-export OPENAI_API_KEY="..."
+echo "OPENAI_API_KEY=..." > .env
 ```
 
 3) Ingest documents
 ```bash
-conda run -n llm python scripts/ingest.py --paths data/docs
+python scripts/ingest.py --paths data/docs
 ```
 
 4) Ask a question
 ```bash
-conda run -n llm python scripts/ask.py --query "your question" --search-k 20 --top-k 5 --rerank
+python scripts/ask.py --query "your question" --search-k 20 --top-k 5 --rerank
 ```
 
-## Configuration (Env Vars)
+## Configuration
+Environment variables are loaded from `.env` at project root (if present).
+
 - `RAG_COLLECTION` (default: `rag_chunks`)
 - `MILVUS_URI` (default: `data/milvus.db`)
 - `RAG_EMBEDDING_MODEL` (default: `sentence-transformers/all-MiniLM-L6-v2`)
@@ -78,7 +58,55 @@ conda run -n llm python scripts/ask.py --query "your question" --search-k 20 --t
 - `RAG_RERANK_TOP_K` (default: `5`)
 - `RAG_BATCH_SIZE` (default: `64`)
 
+## CLI Reference
+### Ingest
+```bash
+python scripts/ingest.py --paths <files_or_dirs> [--reset]
+```
+Key flags:
+- `--paths`: files or directories to ingest
+- `--chunk-size`, `--overlap`: chunking behavior
+- `--embedding-model`: embedding model name
+- `--milvus-uri`, `--collection`: Milvus settings
+- `--reset`: drop collection before ingest
+
+### Ask
+```bash
+python scripts/ask.py --query "..." [--rerank]
+```
+Key flags:
+- `--query`: question text
+- `--search-k`: retrieve this many chunks before rerank
+- `--top-k`: number of chunks used in the final context
+- `--rerank`: enable cross-encoder reranking
+- `--openai-model`: OpenAI chat model name
+
+## Milvus Modes
+- Default uses Milvus Lite via `MILVUS_URI=data/milvus.db`.
+- For a server, set `MILVUS_URI=http://localhost:19530` and start Milvus separately.
+
+## Project Structure (File by File)
+- `.gitignore`: ignores caches, local data, and Milvus DB files.
+- `.env`: local environment variables (not committed).
+- `requirements.txt`: Python dependencies.
+- `data/`: local data folder (ignored by git, except `.gitkeep`).
+- `rag/__init__.py`: package exports.
+- `rag/config.py`: default configuration + env overrides.
+- `rag/parsers/__init__.py`: routes to parser by extension.
+- `rag/parsers/pdf_parser.py`: PDF -> Markdown.
+- `rag/parsers/docx_parser.py`: DOCX -> Markdown.
+- `rag/parsers/md_parser.py`: Markdown/text passthrough.
+- `rag/chunking.py`: heading-aware chunking + overlap.
+- `rag/embeddings.py`: embedding model wrapper.
+- `rag/vector_store.py`: Milvus collection + insert/search.
+- `rag/ingest.py`: ingestion pipeline (parse -> chunk -> embed -> insert).
+- `rag/retriever.py`: query embedding + vector search.
+- `rag/rerank.py`: cross-encoder reranker.
+- `rag/llm.py`: OpenAI chat wrapper.
+- `rag/answer.py`: prompt/context builder + LLM call.
+- `scripts/ingest.py`: CLI for ingestion.
+- `scripts/ask.py`: CLI for Q&A (answer + evidence).
+
 ## Notes
-- `MILVUS_URI=data/milvus.db` uses Milvus Lite (local embedded DB via pymilvus).
-- If you use a Milvus server, set `MILVUS_URI` to `http://localhost:19530` and start Milvus separately.
-- The CLI prints evidence with `source/page/section` to make the answer verifiable.
+- First run will download models for embeddings and rerank (can be large).
+- The CLI prints evidence with `source/page/section` so answers are verifiable.
