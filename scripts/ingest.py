@@ -13,17 +13,23 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from rag.config import (
+from rag_core.config import (
     DEFAULT_BATCH_SIZE,
     DEFAULT_CHUNK_OVERLAP,
     DEFAULT_CHUNK_SIZE,
     DEFAULT_COLLECTION,
+    DEFAULT_EMBEDDING_DIM,
     DEFAULT_EMBEDDING_MODEL,
+    DEFAULT_EMBEDDING_PROVIDER,
+    DEFAULT_INDEX_EF_CONSTRUCTION,
+    DEFAULT_INDEX_M,
+    DEFAULT_INDEX_NLIST,
+    DEFAULT_INDEX_TYPE,
     DEFAULT_MILVUS_URI,
 )
-from rag.embeddings import EmbeddingModel
-from rag.ingest import ingest_documents
-from rag.vector_store import VectorStore
+from rag_core.embeddings import EmbeddingModel
+from rag_core.ingest import ingest_documents
+from rag_core.vector_store import VectorStore
 
 
 def parse_args() -> argparse.Namespace:
@@ -45,9 +51,43 @@ def parse_args() -> argparse.Namespace:
         help="Milvus collection name.",
     )
     parser.add_argument(
+        "--index-type",
+        default=DEFAULT_INDEX_TYPE,
+        help="Milvus index type: HNSW, IVF_FLAT, FLAT, AUTOINDEX.",
+    )
+    parser.add_argument(
+        "--index-nlist",
+        type=int,
+        default=DEFAULT_INDEX_NLIST,
+        help="IVF_FLAT nlist parameter.",
+    )
+    parser.add_argument(
+        "--index-m",
+        type=int,
+        default=DEFAULT_INDEX_M,
+        help="HNSW M parameter.",
+    )
+    parser.add_argument(
+        "--index-ef-construction",
+        type=int,
+        default=DEFAULT_INDEX_EF_CONSTRUCTION,
+        help="HNSW efConstruction parameter.",
+    )
+    parser.add_argument(
+        "--embedding-provider",
+        default=DEFAULT_EMBEDDING_PROVIDER,
+        help="Embedding provider: sentence-transformers or openai.",
+    )
+    parser.add_argument(
         "--embedding-model",
         default=DEFAULT_EMBEDDING_MODEL,
-        help="SentenceTransformer model name.",
+        help="Embedding model name (SentenceTransformers or OpenAI).",
+    )
+    parser.add_argument(
+        "--embedding-dim",
+        type=int,
+        default=DEFAULT_EMBEDDING_DIM,
+        help="Embedding dimension (required for unknown OpenAI models).",
     )
     parser.add_argument(
         "--chunk-size",
@@ -83,11 +123,23 @@ def main() -> None:
     if args.reset and utility.has_collection(args.collection):
         utility.drop_collection(args.collection)
 
-    embedding_model = EmbeddingModel(args.embedding_model)
+    embedding_dim = args.embedding_dim if args.embedding_dim and args.embedding_dim > 0 else None
+    embedding_model = EmbeddingModel(
+        args.embedding_model,
+        provider=args.embedding_provider,
+        embedding_dim=embedding_dim,
+    )
+    index_params = {
+        "nlist": args.index_nlist,
+        "M": args.index_m,
+        "efConstruction": args.index_ef_construction,
+    }
     vector_store = VectorStore(
         uri=args.milvus_uri,
         collection_name=args.collection,
         embedding_dim=embedding_model.dimension,
+        index_type=args.index_type,
+        index_params=index_params,
     )
 
     total_chunks = ingest_documents(

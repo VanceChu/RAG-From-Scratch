@@ -48,7 +48,13 @@ Environment variables are loaded from `.env` at project root (if present).
 
 - `RAG_COLLECTION` (default: `rag_chunks`)
 - `MILVUS_URI` (default: `data/milvus.db`)
+- `RAG_INDEX_TYPE` (default: `HNSW`, Lite supports `FLAT`, `IVF_FLAT`, `AUTOINDEX`)
+- `RAG_INDEX_NLIST` (default: `128`, IVF only)
+- `RAG_INDEX_M` (default: `8`, HNSW only)
+- `RAG_INDEX_EF_CONSTRUCTION` (default: `64`, HNSW only)
+- `RAG_EMBEDDING_PROVIDER` (default: `sentence-transformers`)
 - `RAG_EMBEDDING_MODEL` (default: `sentence-transformers/all-MiniLM-L6-v2`)
+- `RAG_EMBEDDING_DIM` (default: `0`, required for unknown OpenAI models)
 - `RAG_RERANK_MODEL` (default: `cross-encoder/ms-marco-MiniLM-L-6-v2`)
 - `RAG_OPENAI_MODEL` (default: `gpt-4o-mini`)
 - `RAG_CHUNK_SIZE` (default: `800`)
@@ -58,6 +64,12 @@ Environment variables are loaded from `.env` at project root (if present).
 - `RAG_RERANK_TOP_K` (default: `5`)
 - `RAG_BATCH_SIZE` (default: `64`)
 
+Use OpenAI embeddings (no local model download):
+```bash
+export RAG_EMBEDDING_PROVIDER=openai
+export RAG_EMBEDDING_MODEL=text-embedding-3-small
+```
+
 ## CLI Reference
 ### Ingest
 ```bash
@@ -66,7 +78,13 @@ python scripts/ingest.py --paths <files_or_dirs> [--reset]
 Key flags:
 - `--paths`: files or directories to ingest
 - `--chunk-size`, `--overlap`: chunking behavior
+- `--index-type`: HNSW, IVF_FLAT, FLAT, AUTOINDEX
+- `--index-nlist`: IVF_FLAT only
+- `--index-m`: HNSW only
+- `--index-ef-construction`: HNSW only
+- `--embedding-provider`: `sentence-transformers` or `openai`
 - `--embedding-model`: embedding model name
+- `--embedding-dim`: required for unknown OpenAI models
 - `--milvus-uri`, `--collection`: Milvus settings
 - `--reset`: drop collection before ingest
 
@@ -79,6 +97,13 @@ Key flags:
 - `--search-k`: retrieve this many chunks before rerank
 - `--top-k`: number of chunks used in the final context
 - `--rerank`: enable cross-encoder reranking
+- `--index-type`: HNSW, IVF_FLAT, FLAT, AUTOINDEX
+- `--index-nlist`: IVF_FLAT only
+- `--index-m`: HNSW only
+- `--index-ef-construction`: HNSW only
+- `--embedding-provider`: `sentence-transformers` or `openai`
+- `--embedding-model`: embedding model name
+- `--embedding-dim`: required for unknown OpenAI models
 - `--openai-model`: OpenAI chat model name
 
 ## Milvus Modes
@@ -90,20 +115,20 @@ Key flags:
 - `.env`: local environment variables (not committed).
 - `requirements.txt`: Python dependencies.
 - `data/`: local data folder (ignored by git, except `.gitkeep`).
-- `rag/__init__.py`: package exports.
-- `rag/config.py`: default configuration + env overrides.
-- `rag/parsers/__init__.py`: routes to parser by extension.
-- `rag/parsers/pdf_parser.py`: PDF -> Markdown.
-- `rag/parsers/docx_parser.py`: DOCX -> Markdown.
-- `rag/parsers/md_parser.py`: Markdown/text passthrough.
-- `rag/chunking.py`: heading-aware chunking + overlap.
-- `rag/embeddings.py`: embedding model wrapper.
-- `rag/vector_store.py`: Milvus collection + insert/search.
-- `rag/ingest.py`: ingestion pipeline (parse -> chunk -> embed -> insert).
-- `rag/retriever.py`: query embedding + vector search.
-- `rag/rerank.py`: cross-encoder reranker.
-- `rag/llm.py`: OpenAI chat wrapper.
-- `rag/answer.py`: prompt/context builder + LLM call.
+- `rag_core/__init__.py`: package exports.
+- `rag_core/config.py`: default configuration + env overrides.
+- `rag_core/parsers/__init__.py`: routes to parser by extension.
+- `rag_core/parsers/pdf_parser.py`: PDF -> Markdown.
+- `rag_core/parsers/docx_parser.py`: DOCX -> Markdown.
+- `rag_core/parsers/md_parser.py`: Markdown/text passthrough.
+- `rag_core/chunking.py`: heading-aware chunking + overlap.
+- `rag_core/embeddings.py`: embedding model wrapper.
+- `rag_core/vector_store.py`: Milvus collection + insert/search.
+- `rag_core/ingest.py`: ingestion pipeline (parse -> chunk -> embed -> insert).
+- `rag_core/retriever.py`: query embedding + vector search.
+- `rag_core/rerank.py`: cross-encoder reranker.
+- `rag_core/llm.py`: OpenAI chat wrapper.
+- `rag_core/answer.py`: prompt/context builder + LLM call.
 - `scripts/ingest.py`: CLI for ingestion.
 - `scripts/ask.py`: CLI for Q&A (answer + evidence).
 
