@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+.env
+.DS_Store
+.milvus/
+*.db
+*.sqlite
+*.log
+data/
+!data/.gitkeep

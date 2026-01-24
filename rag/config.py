@@ -1,0 +1,59 @@
+"""Configuration defaults and environment overrides."""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+
+def _load_dotenv(path: str | Path) -> None:
+    env_path = Path(path)
+    if not env_path.exists():
+        return
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key or key in os.environ:
+            continue
+        value = value.strip().strip("\"").strip("'")
+        os.environ[key] = value
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+_load_dotenv(PROJECT_ROOT / ".env")
+
+
+def _env_int(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
+def _env_str(name: str, default: str) -> str:
+    value = os.getenv(name)
+    return value if value else default
+
+
+DEFAULT_COLLECTION = _env_str("RAG_COLLECTION", "rag_chunks")
+DEFAULT_MILVUS_URI = _env_str("MILVUS_URI", "data/milvus.db")
+DEFAULT_EMBEDDING_MODEL = _env_str(
+    "RAG_EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2"
+)
+DEFAULT_RERANK_MODEL = _env_str(
+    "RAG_RERANK_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2"
+)
+DEFAULT_OPENAI_MODEL = _env_str("RAG_OPENAI_MODEL", "gpt-4o-mini")
+
+DEFAULT_CHUNK_SIZE = _env_int("RAG_CHUNK_SIZE", 800)
+DEFAULT_CHUNK_OVERLAP = _env_int("RAG_CHUNK_OVERLAP", 120)
+DEFAULT_TOP_K = _env_int("RAG_TOP_K", 5)
+DEFAULT_SEARCH_K = _env_int("RAG_SEARCH_K", 20)
+DEFAULT_RERANK_TOP_K = _env_int("RAG_RERANK_TOP_K", 5)
+DEFAULT_BATCH_SIZE = _env_int("RAG_BATCH_SIZE", 64)

@@ -1,0 +1,5 @@
+pymilvus>=2.4.0
+sentence-transformers>=2.2.2
+pdfplumber>=0.10.3
+python-docx>=0.8.11
+openai>=1.30.0
