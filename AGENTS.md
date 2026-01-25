@@ -8,6 +8,7 @@
 - `requirements.txt`: Python dependencies; `.env` holds local config.
 
 ## Build, Test, and Development Commands
+- Run all commands inside the `llm` conda environment (e.g., `conda run -n llm ...`).
 - `python -m pip install -r requirements.txt` installs runtime dependencies.
 - `echo "OPENAI_API_KEY=..." > .env` sets required secrets (auto-loaded).
 - `python scripts/ingest.py --paths data/docs` ingests files into Milvus Lite.

@@ -7,16 +7,17 @@ A small, runnable RAG (Retrieval-Augmented Generation) demo.
 It turns documents into a searchable knowledge base and answers questions with citations.
 
 ## What it does
-- Ingests PDF/DOCX/Markdown/text files
-- Chunks content by headings with overlap
+- Ingests PDF/DOCX/Markdown/text/image files
+- Parses PDFs with DeepDoc (layout, tables, figures, positions)
+- Chunks content with a token-aware splitter and keeps positions
 - Creates embeddings using SentenceTransformers
 - Stores and searches vectors in Milvus (HNSW, inner product)
 - Optionally reranks with a cross-encoder
 - Generates answers with evidence snippets
 
 ## How it works (high level)
-1) Parse documents into Markdown
-2) Split into chunks and embed
+1) Parse documents into structured sections (text + positions + images)
+2) Split into token-sized chunks and persist image crops
 3) Store vectors in Milvus
 4) Embed the query and retrieve top matches
 5) (Optional) rerank results
@@ -57,12 +58,13 @@ Environment variables are loaded from `.env` at project root (if present).
 - `RAG_EMBEDDING_DIM` (default: `0`, required for unknown OpenAI models)
 - `RAG_RERANK_MODEL` (default: `cross-encoder/ms-marco-MiniLM-L-6-v2`)
 - `RAG_OPENAI_MODEL` (default: `gpt-4o-mini`)
-- `RAG_CHUNK_SIZE` (default: `800`)
-- `RAG_CHUNK_OVERLAP` (default: `120`)
+- `RAG_CHUNK_SIZE` (default: `800`, tokens)
+- `RAG_CHUNK_OVERLAP` (default: `120`, tokens)
 - `RAG_TOP_K` (default: `5`)
 - `RAG_SEARCH_K` (default: `20`)
 - `RAG_RERANK_TOP_K` (default: `5`)
 - `RAG_BATCH_SIZE` (default: `64`)
+- `RAG_IMAGE_DIR` (default: `data/chunk_images`)
 
 Milvus Lite uses a limited set of index types. For local `data/milvus.db`, set:
 ```bash
@@ -82,7 +84,7 @@ python scripts/ingest.py --paths <files_or_dirs> [--reset]
 ```
 Key flags:
 - `--paths`: files or directories to ingest
-- `--chunk-size`, `--overlap`: chunking behavior
+- `--chunk-size`, `--overlap`: chunking behavior (tokens)
 - `--index-type`: HNSW, IVF_FLAT, FLAT, AUTOINDEX
 - `--index-nlist`: IVF_FLAT only
 - `--index-m`: HNSW only
@@ -122,11 +124,10 @@ Key flags:
 - `data/`: local data folder (ignored by git, except `.gitkeep`).
 - `rag_core/__init__.py`: package exports.
 - `rag_core/config.py`: default configuration + env overrides.
-- `rag_core/parsers/__init__.py`: routes to parser by extension.
-- `rag_core/parsers/pdf_parser.py`: PDF -> Markdown.
-- `rag_core/parsers/docx_parser.py`: DOCX -> Markdown.
-- `rag_core/parsers/md_parser.py`: Markdown/text passthrough.
-- `rag_core/chunking.py`: heading-aware chunking + overlap.
+- `rag_core/ragflow_pipeline.py`: RagFlow-based parse + split pipeline.
+- `rag_core/vendor/ragflow/`: vendored RagFlow/DeepDoc code.
+- `rag_core/parsers/`: legacy Markdown parsers (unused by default).
+- `rag_core/chunking.py`: legacy heading-based chunking (unused by default).
 - `rag_core/embeddings.py`: embedding model wrapper.
 - `rag_core/vector_store.py`: Milvus collection + insert/search.
 - `rag_core/ingest.py`: ingestion pipeline (parse -> chunk -> embed -> insert).
@@ -138,5 +139,5 @@ Key flags:
 - `scripts/ask.py`: CLI for Q&A (answer + evidence).
 
 ## Notes
-- First run will download models for embeddings and rerank (can be large).
+- First run will download OCR/layout models used by DeepDoc (can be large).
 - The CLI prints evidence with `source/page/section` so answers are verifiable.
