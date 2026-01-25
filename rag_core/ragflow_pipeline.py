@@ -15,7 +15,7 @@ from rag_core.config import DEFAULT_IMAGE_DIR
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 VENDOR_ROOT = Path(__file__).resolve().parent / "vendor" / "ragflow_slim"
-DEFAULT_RAG_PROJECT_BASE = PROJECT_ROOT / "data" / "ragflow"
+DEFAULT_RAG_PROJECT_BASE = PROJECT_ROOT / "data" / "index" / "ragflow"
 LEGACY_VENDOR_ROOT = Path(__file__).resolve().parent / "vendor" / "ragflow"
 LEGACY_MODEL_DIR = LEGACY_VENDOR_ROOT / "rag" / "res" / "deepdoc"
 

@@ -36,9 +36,9 @@ echo "OPENAI_API_KEY=..." > .env
 
 3) Ingest documents
 ```bash
-conda run -n llm python scripts/ingest.py --paths data/docs --index-type FLAT
+conda run -n llm python scripts/ingest.py --paths data/raw/docs --index-type FLAT
 ```
-Re-running ingest without `--reset` performs incremental updates and persists state under `data/ingest_state`.
+Re-running ingest without `--reset` performs incremental updates and persists state under `data/index/ingest_state`.
 
 4) Ask questions (interactive by default)
 ```bash
@@ -53,7 +53,7 @@ conda run -n llm python scripts/ask.py --query "your question" --index-type FLAT
 Environment variables are loaded from `.env` at project root (if present).
 
 - `RAG_COLLECTION` (default: `rag_chunks`, treated as a base name)
-- `MILVUS_URI` (default: `data/milvus.db`)
+- `MILVUS_URI` (default: `data/index/milvus.db`)
 - `RAG_INDEX_TYPE` (default: `HNSW`, Lite supports `FLAT`, `IVF_FLAT`, `AUTOINDEX`)
 - `RAG_INDEX_NLIST` (default: `128`, IVF only)
 - `RAG_INDEX_M` (default: `8`, HNSW only)
@@ -69,15 +69,19 @@ Environment variables are loaded from `.env` at project root (if present).
 - `RAG_SEARCH_K` (default: `20`)
 - `RAG_RERANK_TOP_K` (default: `5`)
 - `RAG_BATCH_SIZE` (default: `64`)
-- `RAG_STATE_DIR` (default: `data/ingest_state`)
-- `RAG_IMAGE_DIR` (default: `data/chunk_images`, images stored under `<base>/<collection>/`)
+- `RAG_STATE_DIR` (default: `data/index/ingest_state`)
+- `RAG_IMAGE_DIR` (default: `data/index/chunk_images`, images stored under `<base>/<collection>/`)
 
 Chunk images are automatically isolated per collection under `RAG_IMAGE_DIR/<collection>/`.
 When the embedding provider/model differs from the defaults, the CLI automatically
 derives a collection name from the base to avoid mixing embeddings. Use
 `--collection-raw` to opt out.
 
-Milvus Lite uses a limited set of index types. For local `data/milvus.db`, set:
+Recommended local layout:
+- `data/raw/`: source documents you ingest
+- `data/index/`: local indexes and artifacts (Milvus Lite DB, ingest state, chunk images, ragflow models)
+
+Milvus Lite uses a limited set of index types. For local `data/index/milvus.db`, set:
 ```bash
 export RAG_INDEX_TYPE=FLAT
 ```
@@ -134,18 +138,19 @@ Key flags:
 - `--openai-model`: OpenAI chat model name
 
 ## Milvus Modes
-- Default uses Milvus Lite via `MILVUS_URI=data/milvus.db`.
+- Default uses Milvus Lite via `MILVUS_URI=data/index/milvus.db`.
 - For a server, set `MILVUS_URI=http://localhost:19530` and start Milvus separately.
 
 ## Project Structure (File by File)
 - `.gitignore`: ignores caches, local data, and Milvus DB files.
 - `.env`: local environment variables (not committed).
 - `requirements.txt`: Python dependencies.
-- `data/`: local data folder (ignored by git, except `.gitkeep`).
+- `data/raw/`: source documents for ingestion (ignored by git).
+- `data/index/`: local indexes/artifacts (Milvus Lite, ingest state, chunk images, ragflow models; ignored by git).
 - `rag_core/__init__.py`: package exports.
 - `rag_core/config.py`: default configuration + env overrides.
 - `rag_core/ragflow_pipeline.py`: RagFlow-based parse + split pipeline.
-- `rag_core/vendor/ragflow/`: vendored RagFlow/DeepDoc code.
+- `rag_core/vendor/ragflow_slim/`: vendored RagFlow/DeepDoc code (slim subset).
 - `rag_core/parsers/`: legacy Markdown parsers (unused by default).
 - `rag_core/chunking.py`: legacy heading-based chunking (unused by default).
 - `rag_core/embeddings.py`: embedding model wrapper.

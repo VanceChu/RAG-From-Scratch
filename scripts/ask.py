@@ -37,6 +37,13 @@ from rag_core.retriever import retrieve
 from rag_core.vector_store import SearchResult, VectorStore
 
 
+def _ensure_local_milvus_parent(uri: str) -> None:
+    if "://" in uri:
+        return
+    path = Path(uri).expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Ask questions over your documents.")
     parser.add_argument("--query", help="Question to ask.")
@@ -216,6 +223,7 @@ def main() -> None:
         raw=args.collection_raw,
     )
 
+    _ensure_local_milvus_parent(args.milvus_uri)
     embedding_dim = args.embedding_dim if args.embedding_dim and args.embedding_dim > 0 else None
     embedding_model = EmbeddingModel(
         args.embedding_model,

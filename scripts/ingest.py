@@ -35,6 +35,13 @@ from rag_core.ingest_state import IngestState
 from rag_core.vector_store import VectorStore
 
 
+def _ensure_local_milvus_parent(uri: str) -> None:
+    if "://" in uri:
+        return
+    path = Path(uri).expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Ingest documents into Milvus.")
     parser.add_argument(
@@ -133,6 +140,7 @@ def main() -> None:
         raw=args.collection_raw,
     )
 
+    _ensure_local_milvus_parent(args.milvus_uri)
     connections.connect(alias="default", uri=args.milvus_uri)
     if args.reset and utility.has_collection(collection_name):
         utility.drop_collection(collection_name)

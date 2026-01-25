@@ -82,7 +82,7 @@ def resolve_collection_name(
 
 
 DEFAULT_COLLECTION = _env_str("RAG_COLLECTION", "rag_chunks")
-DEFAULT_MILVUS_URI = _env_str("MILVUS_URI", "data/milvus.db")
+DEFAULT_MILVUS_URI = _env_str("MILVUS_URI", "data/index/milvus.db")
 DEFAULT_INDEX_TYPE = _env_str("RAG_INDEX_TYPE", "HNSW")
 DEFAULT_INDEX_NLIST = _env_int("RAG_INDEX_NLIST", 128)
 DEFAULT_INDEX_M = _env_int("RAG_INDEX_M", 8)
@@ -105,5 +105,5 @@ DEFAULT_TOP_K = _env_int("RAG_TOP_K", 5)
 DEFAULT_SEARCH_K = _env_int("RAG_SEARCH_K", 20)
 DEFAULT_RERANK_TOP_K = _env_int("RAG_RERANK_TOP_K", 5)
 DEFAULT_BATCH_SIZE = _env_int("RAG_BATCH_SIZE", 64)
-DEFAULT_IMAGE_DIR = _env_path("RAG_IMAGE_DIR", "data/chunk_images")
-DEFAULT_STATE_DIR = _env_path("RAG_STATE_DIR", "data/ingest_state")
+DEFAULT_IMAGE_DIR = _env_path("RAG_IMAGE_DIR", "data/index/chunk_images")
+DEFAULT_STATE_DIR = _env_path("RAG_STATE_DIR", "data/index/ingest_state")
