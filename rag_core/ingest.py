@@ -5,13 +5,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Iterable
 
-from rag_core.chunking import chunk_markdown
 from rag_core.embeddings import EmbeddingModel
-from rag_core.parsers import parse_document
+from rag_core.ragflow_pipeline import (
+    SUPPORTED_EXTENSIONS,
+    parse_and_split_document,
+)
 from rag_core.vector_store import VectorStore
-
-
-SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".doc", ".md", ".markdown", ".txt"}
 
 
 def _iter_documents(paths: Iterable[Path]) -> Iterable[Path]:
@@ -38,19 +37,14 @@ def ingest_documents(
     metadatas: list[dict] = []
 
     for doc_path in _iter_documents(paths):
-        markdown, doc_metadata = parse_document(doc_path)
-        for chunk in chunk_markdown(
-            markdown=markdown,
-            source=doc_path,
-            chunk_size=chunk_size,
-            overlap=overlap,
-        ):
-            metadata = {
-                **chunk.metadata,
-                "doc_metadata": doc_metadata,
-            }
-            texts.append(chunk.text)
-            metadatas.append(metadata)
+        chunks = parse_and_split_document(
+            path=doc_path,
+            chunk_token_size=chunk_size,
+            overlap_tokens=overlap,
+        )
+        for chunk in chunks:
+            texts.append(chunk["text"])
+            metadatas.append(chunk["metadata"])
             if len(texts) >= batch_size:
                 embeddings = embedding_model.embed(texts, batch_size=batch_size)
                 vector_store.insert(embeddings, texts, metadatas)

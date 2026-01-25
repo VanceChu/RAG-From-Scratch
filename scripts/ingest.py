@@ -93,13 +93,13 @@ def parse_args() -> argparse.Namespace:
         "--chunk-size",
         type=int,
         default=DEFAULT_CHUNK_SIZE,
-        help="Chunk size in characters.",
+        help="Chunk size in tokens.",
     )
     parser.add_argument(
         "--overlap",
         type=int,
         default=DEFAULT_CHUNK_OVERLAP,
-        help="Chunk overlap in characters.",
+        help="Chunk overlap in tokens.",
     )
     parser.add_argument(
         "--batch-size",
