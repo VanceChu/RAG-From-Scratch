@@ -26,7 +26,7 @@ It turns documents into a searchable knowledge base and answers questions with c
 ## Quickstart
 1) Install dependencies
 ```bash
-python -m pip install -r requirements.txt
+conda run -n llm python -m pip install -r requirements.txt
 ```
 
 2) Set your OpenAI key (auto-loads `.env`)
@@ -36,12 +36,17 @@ echo "OPENAI_API_KEY=..." > .env
 
 3) Ingest documents
 ```bash
-python scripts/ingest.py --paths data/docs
+conda run -n llm python scripts/ingest.py --paths data/docs --index-type FLAT
 ```
+Re-running ingest without `--reset` performs incremental updates and persists state under `data/ingest_state`.
 
-4) Ask a question
+4) Ask questions (interactive by default)
 ```bash
-python scripts/ask.py --query "your question" --search-k 20 --top-k 5 --rerank
+conda run -n llm python scripts/ask.py --index-type FLAT --rerank
+```
+To ask a single question:
+```bash
+conda run -n llm python scripts/ask.py --query "your question" --index-type FLAT --rerank
 ```
 
 ## Configuration
@@ -64,6 +69,7 @@ Environment variables are loaded from `.env` at project root (if present).
 - `RAG_SEARCH_K` (default: `20`)
 - `RAG_RERANK_TOP_K` (default: `5`)
 - `RAG_BATCH_SIZE` (default: `64`)
+- `RAG_STATE_DIR` (default: `data/ingest_state`)
 - `RAG_IMAGE_DIR` (default: `data/chunk_images`)
 
 Milvus Lite uses a limited set of index types. For local `data/milvus.db`, set:
@@ -80,7 +86,7 @@ export RAG_EMBEDDING_MODEL=text-embedding-3-small
 ## CLI Reference
 ### Ingest
 ```bash
-python scripts/ingest.py --paths <files_or_dirs> [--reset]
+conda run -n llm python scripts/ingest.py --paths <files_or_dirs> [--reset]
 ```
 Key flags:
 - `--paths`: files or directories to ingest
@@ -93,17 +99,22 @@ Key flags:
 - `--embedding-model`: embedding model name
 - `--embedding-dim`: required for unknown OpenAI models
 - `--milvus-uri`, `--collection`: Milvus settings
-- `--reset`: drop collection before ingest
+- `--reset`: drop collection and clear ingest state before ingest
+
+By default, ingest is incremental: unchanged documents are skipped, and changed documents are refreshed.
 
 ### Ask
 ```bash
-python scripts/ask.py --query "..." [--rerank]
+conda run -n llm python scripts/ask.py [--query "..."] [--rerank]
 ```
 Key flags:
-- `--query`: question text
+- `--query`: question text (optional; interactive mode starts if omitted)
 - `--search-k`: retrieve this many chunks before rerank
 - `--top-k`: number of chunks used in the final context
 - `--rerank`: enable cross-encoder reranking
+- `--stream`, `--no-stream`: stream tokens during generation (default: stream)
+- `--interactive`: force interactive mode even when `--query` is provided
+- `--history-turns`: number of recent turns included in the prompt
 - `--index-type`: HNSW, IVF_FLAT, FLAT, AUTOINDEX
 - `--index-nlist`: IVF_FLAT only
 - `--index-m`: HNSW only
@@ -130,13 +141,14 @@ Key flags:
 - `rag_core/chunking.py`: legacy heading-based chunking (unused by default).
 - `rag_core/embeddings.py`: embedding model wrapper.
 - `rag_core/vector_store.py`: Milvus collection + insert/search.
+- `rag_core/ingest_state.py`: persistent ingest state for incremental updates.
 - `rag_core/ingest.py`: ingestion pipeline (parse -> chunk -> embed -> insert).
 - `rag_core/retriever.py`: query embedding + vector search.
 - `rag_core/rerank.py`: cross-encoder reranker.
 - `rag_core/llm.py`: OpenAI chat wrapper.
 - `rag_core/answer.py`: prompt/context builder + LLM call.
 - `scripts/ingest.py`: CLI for ingestion.
-- `scripts/ask.py`: CLI for Q&A (answer + evidence).
+- `scripts/ask.py`: CLI for Q&A (interactive loop + streaming answers + evidence).
 
 ## Notes
 - First run will download OCR/layout models used by DeepDoc (can be large).

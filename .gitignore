@@ -9,5 +9,6 @@ __pycache__/
 *.db
 *.sqlite
 *.log
+parsed_result.json
 data/
 !data/.gitkeep
