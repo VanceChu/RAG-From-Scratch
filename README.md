@@ -62,7 +62,7 @@ Environment variables are loaded from `.env` at project root (if present).
 - `RAG_EMBEDDING_MODEL` (default: `sentence-transformers/all-MiniLM-L6-v2`)
 - `RAG_EMBEDDING_DIM` (default: `0`, required for unknown OpenAI models)
 - `RAG_RERANK_MODEL` (default: `cross-encoder/ms-marco-MiniLM-L-6-v2`)
-- `RAG_OPENAI_MODEL` (default: `gpt-4o-mini`)
+- `RAG_OPENAI_MODEL` (default: `gpt-5.1`)
 - `RAG_CHUNK_SIZE` (default: `800`, tokens)
 - `RAG_CHUNK_OVERLAP` (default: `120`, tokens)
 - `RAG_TOP_K` (default: `5`)
