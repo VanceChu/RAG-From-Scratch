@@ -28,6 +28,7 @@ from rag_core.config import (
     DEFAULT_RERANK_TOP_K,
     DEFAULT_SEARCH_K,
     DEFAULT_TOP_K,
+    resolve_collection_name,
 )
 from rag_core.embeddings import EmbeddingModel
 from rag_core.llm import OpenAIChatLLM
@@ -48,6 +49,11 @@ def parse_args() -> argparse.Namespace:
         "--collection",
         default=DEFAULT_COLLECTION,
         help="Milvus collection name.",
+    )
+    parser.add_argument(
+        "--collection-raw",
+        action="store_true",
+        help="Use the collection name as-is (disable model-based suffix).",
     )
     parser.add_argument(
         "--index-type",
@@ -203,6 +209,12 @@ def _answer_once(
 
 def main() -> None:
     args = parse_args()
+    collection_name = resolve_collection_name(
+        base_collection=args.collection,
+        embedding_provider=args.embedding_provider,
+        embedding_model=args.embedding_model,
+        raw=args.collection_raw,
+    )
 
     embedding_dim = args.embedding_dim if args.embedding_dim and args.embedding_dim > 0 else None
     embedding_model = EmbeddingModel(
@@ -217,7 +229,7 @@ def main() -> None:
     }
     vector_store = VectorStore(
         uri=args.milvus_uri,
-        collection_name=args.collection,
+        collection_name=collection_name,
         embedding_dim=embedding_model.dimension,
         index_type=args.index_type,
         index_params=index_params,
@@ -227,6 +239,7 @@ def main() -> None:
         print("No data found in collection. Run ingest first.")
         return
 
+    print(f"Collection: {collection_name}")
     llm = OpenAIChatLLM(model=args.openai_model)
     reranker = Reranker(args.rerank_model) if args.rerank else None
     interactive_mode = args.interactive or not args.query

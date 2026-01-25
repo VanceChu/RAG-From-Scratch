@@ -52,7 +52,7 @@ conda run -n llm python scripts/ask.py --query "your question" --index-type FLAT
 ## Configuration
 Environment variables are loaded from `.env` at project root (if present).
 
-- `RAG_COLLECTION` (default: `rag_chunks`)
+- `RAG_COLLECTION` (default: `rag_chunks`, treated as a base name)
 - `MILVUS_URI` (default: `data/milvus.db`)
 - `RAG_INDEX_TYPE` (default: `HNSW`, Lite supports `FLAT`, `IVF_FLAT`, `AUTOINDEX`)
 - `RAG_INDEX_NLIST` (default: `128`, IVF only)
@@ -73,6 +73,9 @@ Environment variables are loaded from `.env` at project root (if present).
 - `RAG_IMAGE_DIR` (default: `data/chunk_images`, images stored under `<base>/<collection>/`)
 
 Chunk images are automatically isolated per collection under `RAG_IMAGE_DIR/<collection>/`.
+When the embedding provider/model differs from the defaults, the CLI automatically
+derives a collection name from the base to avoid mixing embeddings. Use
+`--collection-raw` to opt out.
 
 Milvus Lite uses a limited set of index types. For local `data/milvus.db`, set:
 ```bash
@@ -100,7 +103,9 @@ Key flags:
 - `--embedding-provider`: `sentence-transformers` or `openai`
 - `--embedding-model`: embedding model name
 - `--embedding-dim`: required for unknown OpenAI models
-- `--milvus-uri`, `--collection`: Milvus settings
+- `--milvus-uri`: Milvus settings
+- `--collection`: base collection name (auto-suffixed for non-default embedding models)
+- `--collection-raw`: disable model-based collection suffix
 - `--reset`: drop collection and clear ingest state before ingest
 
 By default, ingest is incremental: unchanged documents are skipped, and changed documents are refreshed.
@@ -124,6 +129,8 @@ Key flags:
 - `--embedding-provider`: `sentence-transformers` or `openai`
 - `--embedding-model`: embedding model name
 - `--embedding-dim`: required for unknown OpenAI models
+- `--collection`: base collection name (auto-suffixed for non-default embedding models)
+- `--collection-raw`: disable model-based collection suffix
 - `--openai-model`: OpenAI chat model name
 
 ## Milvus Modes

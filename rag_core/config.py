@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 from pathlib import Path
 
@@ -47,6 +48,37 @@ def _env_path(name: str, default: str) -> Path:
     if not path.is_absolute():
         path = PROJECT_ROOT / path
     return path
+
+
+def _safe_identifier(value: str, max_length: int | None = None) -> str:
+    safe = "".join(ch if ch.isalnum() else "_" for ch in value.strip())
+    safe = safe.strip("_") or "default"
+    if max_length and len(safe) > max_length:
+        safe = safe[:max_length]
+    return safe
+
+
+def resolve_collection_name(
+    base_collection: str,
+    embedding_provider: str,
+    embedding_model: str,
+    raw: bool = False,
+) -> str:
+    if raw:
+        return base_collection
+    provider = (embedding_provider or "").strip().lower()
+    model = (embedding_model or "").strip()
+    default_provider = DEFAULT_EMBEDDING_PROVIDER.strip().lower()
+    default_model = DEFAULT_EMBEDDING_MODEL.strip()
+    if provider == default_provider and model == default_model:
+        return base_collection
+    provider_tag = _safe_identifier(provider or "provider", max_length=24)
+    model_tag = _safe_identifier(model or "model", max_length=32)
+    fingerprint = hashlib.sha1(
+        f"{provider}::{model}".encode("utf-8", errors="ignore")
+    ).hexdigest()[:8]
+    base_tag = _safe_identifier(base_collection, max_length=96)
+    return f"{base_tag}__{provider_tag}__{model_tag}_{fingerprint}"
 
 
 DEFAULT_COLLECTION = _env_str("RAG_COLLECTION", "rag_chunks")

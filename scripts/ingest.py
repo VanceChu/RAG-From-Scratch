@@ -27,6 +27,7 @@ from rag_core.config import (
     DEFAULT_INDEX_TYPE,
     DEFAULT_MILVUS_URI,
     DEFAULT_STATE_DIR,
+    resolve_collection_name,
 )
 from rag_core.embeddings import EmbeddingModel
 from rag_core.ingest import ingest_documents
@@ -51,6 +52,11 @@ def parse_args() -> argparse.Namespace:
         "--collection",
         default=DEFAULT_COLLECTION,
         help="Milvus collection name.",
+    )
+    parser.add_argument(
+        "--collection-raw",
+        action="store_true",
+        help="Use the collection name as-is (disable model-based suffix).",
     )
     parser.add_argument(
         "--index-type",
@@ -120,10 +126,16 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     paths = [Path(path).expanduser() for path in args.paths]
+    collection_name = resolve_collection_name(
+        base_collection=args.collection,
+        embedding_provider=args.embedding_provider,
+        embedding_model=args.embedding_model,
+        raw=args.collection_raw,
+    )
 
     connections.connect(alias="default", uri=args.milvus_uri)
-    if args.reset and utility.has_collection(args.collection):
-        utility.drop_collection(args.collection)
+    if args.reset and utility.has_collection(collection_name):
+        utility.drop_collection(collection_name)
 
     embedding_dim = args.embedding_dim if args.embedding_dim and args.embedding_dim > 0 else None
     embedding_model = EmbeddingModel(
@@ -138,7 +150,7 @@ def main() -> None:
     }
     vector_store = VectorStore(
         uri=args.milvus_uri,
-        collection_name=args.collection,
+        collection_name=collection_name,
         embedding_dim=embedding_model.dimension,
         index_type=args.index_type,
         index_params=index_params,
@@ -146,7 +158,7 @@ def main() -> None:
 
     state = IngestState.load(
         uri=args.milvus_uri,
-        collection=args.collection,
+        collection=collection_name,
         state_dir=DEFAULT_STATE_DIR,
     )
     if args.reset:
@@ -161,6 +173,7 @@ def main() -> None:
         batch_size=args.batch_size,
         state=state,
     )
+    print(f"Collection: {collection_name}")
     print(
         "Ingest summary: "
         f"new_docs={summary.new_documents} "
