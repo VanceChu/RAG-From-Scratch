@@ -11,6 +11,7 @@ from typing import Iterable, Tuple
 import numpy as np
 from PIL import Image
 
+from rag_core.config import DEFAULT_IMAGE_DIR
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 VENDOR_ROOT = Path(__file__).resolve().parent / "vendor" / "ragflow_slim"
@@ -233,7 +234,7 @@ def parse_and_split_document(
     image_dir: Path | None = None,
 ) -> list[dict]:
     sections, doc_metadata = _parse_sections(path)
-    image_dir = image_dir or Path(os.getenv("RAG_IMAGE_DIR", "data/chunk_images"))
+    image_dir = image_dir or DEFAULT_IMAGE_DIR
     chunks = _split_sections(
         sections=sections,
         chunk_token_size=chunk_token_size,

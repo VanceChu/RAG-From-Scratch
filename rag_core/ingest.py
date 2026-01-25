@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
+from rag_core.config import DEFAULT_IMAGE_DIR
 from rag_core.embeddings import EmbeddingModel
 from rag_core.ingest_state import IngestState
 from rag_core.ragflow_pipeline import (
@@ -33,6 +34,11 @@ def _normalize_source(path: Path) -> str:
         return str(path)
 
 
+def _safe_collection_name(name: str) -> str:
+    safe = "".join(ch if ch.isalnum() else "_" for ch in name)
+    return safe or "collection"
+
+
 @dataclass
 class IngestSummary:
     inserted_chunks: int = 0
@@ -52,6 +58,9 @@ def ingest_documents(
     state: IngestState,
 ) -> IngestSummary:
     summary = IngestSummary()
+    collection_image_dir = DEFAULT_IMAGE_DIR / _safe_collection_name(
+        vector_store.collection_name
+    )
 
     for doc_path in _iter_documents(paths):
         source = _normalize_source(doc_path)
@@ -64,6 +73,7 @@ def ingest_documents(
             path=doc_path,
             chunk_token_size=chunk_size,
             overlap_tokens=overlap,
+            image_dir=collection_image_dir,
         )
 
         existing = state.get(source)

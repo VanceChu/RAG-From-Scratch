@@ -70,7 +70,9 @@ Environment variables are loaded from `.env` at project root (if present).
 - `RAG_RERANK_TOP_K` (default: `5`)
 - `RAG_BATCH_SIZE` (default: `64`)
 - `RAG_STATE_DIR` (default: `data/ingest_state`)
-- `RAG_IMAGE_DIR` (default: `data/chunk_images`)
+- `RAG_IMAGE_DIR` (default: `data/chunk_images`, images stored under `<base>/<collection>/`)
+
+Chunk images are automatically isolated per collection under `RAG_IMAGE_DIR/<collection>/`.
 
 Milvus Lite uses a limited set of index types. For local `data/milvus.db`, set:
 ```bash
