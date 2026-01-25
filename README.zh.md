@@ -64,6 +64,11 @@ python scripts/ask.py --query "你的问题" --search-k 20 --top-k 5 --rerank
 - `RAG_RERANK_TOP_K`（默认：`5`）
 - `RAG_BATCH_SIZE`（默认：`64`）
 
+Milvus Lite 只支持部分索引类型，本地 `data/milvus.db` 建议设置：
+```bash
+export RAG_INDEX_TYPE=FLAT
+```
+
 使用 OpenAI 向量化（避免本地模型下载）：
 ```bash
 export RAG_EMBEDDING_PROVIDER=openai

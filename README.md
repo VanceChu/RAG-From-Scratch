@@ -64,6 +64,11 @@ Environment variables are loaded from `.env` at project root (if present).
 - `RAG_RERANK_TOP_K` (default: `5`)
 - `RAG_BATCH_SIZE` (default: `64`)
 
+Milvus Lite uses a limited set of index types. For local `data/milvus.db`, set:
+```bash
+export RAG_INDEX_TYPE=FLAT
+```
+
 Use OpenAI embeddings (no local model download):
 ```bash
 export RAG_EMBEDDING_PROVIDER=openai

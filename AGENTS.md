@@ -14,6 +14,8 @@
 - `python scripts/ask.py --query "..." --search-k 20 --top-k 5 --rerank` queries and prints answers with evidence.
 - Optional: `python scripts/ingest.py --paths data/docs --reset` to rebuild the collection.
 - Optional: `MILVUS_URI=http://localhost:19530` to use a Milvus server instead of Lite.
+- Optional: set `RAG_INDEX_TYPE=FLAT` (or `--index-type FLAT`) for Milvus Lite compatibility.
+- Optional: set `RAG_EMBEDDING_PROVIDER=openai` and `RAG_EMBEDDING_MODEL=text-embedding-3-small` to use OpenAI embeddings.
 
 ## Coding Style & Naming Conventions
 - Python with 4-space indentation and PEP 8 style.
