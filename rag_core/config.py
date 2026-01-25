@@ -41,6 +41,14 @@ def _env_str(name: str, default: str) -> str:
     return value if value else default
 
 
+def _env_path(name: str, default: str) -> Path:
+    raw_value = os.getenv(name, default)
+    path = Path(raw_value).expanduser()
+    if not path.is_absolute():
+        path = PROJECT_ROOT / path
+    return path
+
+
 DEFAULT_COLLECTION = _env_str("RAG_COLLECTION", "rag_chunks")
 DEFAULT_MILVUS_URI = _env_str("MILVUS_URI", "data/milvus.db")
 DEFAULT_INDEX_TYPE = _env_str("RAG_INDEX_TYPE", "HNSW")
@@ -65,3 +73,4 @@ DEFAULT_TOP_K = _env_int("RAG_TOP_K", 5)
 DEFAULT_SEARCH_K = _env_int("RAG_SEARCH_K", 20)
 DEFAULT_RERANK_TOP_K = _env_int("RAG_RERANK_TOP_K", 5)
 DEFAULT_BATCH_SIZE = _env_int("RAG_BATCH_SIZE", 64)
+DEFAULT_STATE_DIR = _env_path("RAG_STATE_DIR", "data/ingest_state")

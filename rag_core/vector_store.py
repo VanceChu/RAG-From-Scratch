@@ -147,13 +147,39 @@ class VectorStore:
         embeddings: list[list[float]],
         texts: list[str],
         metadatas: list[dict],
-    ) -> None:
+    ) -> list[int]:
         if not (len(embeddings) == len(texts) == len(metadatas)):
             raise ValueError("Embeddings, texts, and metadatas must be the same length")
         if not embeddings:
-            return
-        self.collection.insert([embeddings, texts, metadatas])
+            return []
+        mutation = self.collection.insert([embeddings, texts, metadatas])
         self.collection.flush()
+        primary_keys = getattr(mutation, "primary_keys", None) or []
+        return [int(key) for key in primary_keys]
+
+    def delete_by_ids(self, ids: Iterable[int], batch_size: int = 512) -> int:
+        id_list = [int(value) for value in ids]
+        if not id_list:
+            return 0
+        total_deleted = 0
+        for start in range(0, len(id_list), batch_size):
+            batch = id_list[start : start + batch_size]
+            expr = f"id in [{','.join(str(value) for value in batch)}]"
+            result = self.collection.delete(expr)
+            total_deleted += int(getattr(result, "delete_count", 0) or 0)
+        self.collection.flush()
+        return total_deleted
+
+    def ids_exist(self, ids: Iterable[int]) -> bool:
+        id_list = [int(value) for value in ids]
+        if not id_list:
+            return False
+        expr = f"id in [{','.join(str(value) for value in id_list)}]"
+        try:
+            rows = self.collection.query(expr=expr, output_fields=["id"], limit=1)
+        except TypeError:
+            rows = self.collection.query(expr=expr, output_fields=["id"])
+        return bool(rows)
 
     def search(
         self,

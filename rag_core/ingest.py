@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
 from rag_core.embeddings import EmbeddingModel
+from rag_core.ingest_state import IngestState
 from rag_core.ragflow_pipeline import (
     SUPPORTED_EXTENSIONS,
     parse_and_split_document,
@@ -24,6 +26,22 @@ def _iter_documents(paths: Iterable[Path]) -> Iterable[Path]:
                 yield path
 
 
+def _normalize_source(path: Path) -> str:
+    try:
+        return str(path.resolve())
+    except OSError:
+        return str(path)
+
+
+@dataclass
+class IngestSummary:
+    inserted_chunks: int = 0
+    deleted_chunks: int = 0
+    skipped_documents: int = 0
+    refreshed_documents: int = 0
+    new_documents: int = 0
+
+
 def ingest_documents(
     paths: Iterable[Path],
     embedding_model: EmbeddingModel,
@@ -31,30 +49,50 @@ def ingest_documents(
     chunk_size: int,
     overlap: int,
     batch_size: int,
-) -> int:
-    total_chunks = 0
-    texts: list[str] = []
-    metadatas: list[dict] = []
+    state: IngestState,
+) -> IngestSummary:
+    summary = IngestSummary()
 
     for doc_path in _iter_documents(paths):
+        source = _normalize_source(doc_path)
+        doc_hash = state.compute_hash(doc_path)
+        if state.is_unchanged(source, doc_hash, vector_store):
+            summary.skipped_documents += 1
+            continue
+
         chunks = parse_and_split_document(
             path=doc_path,
             chunk_token_size=chunk_size,
             overlap_tokens=overlap,
         )
-        for chunk in chunks:
-            texts.append(chunk["text"])
-            metadatas.append(chunk["metadata"])
-            if len(texts) >= batch_size:
-                embeddings = embedding_model.embed(texts, batch_size=batch_size)
-                vector_store.insert(embeddings, texts, metadatas)
-                total_chunks += len(texts)
-                texts.clear()
-                metadatas.clear()
 
-    if texts:
-        embeddings = embedding_model.embed(texts, batch_size=batch_size)
-        vector_store.insert(embeddings, texts, metadatas)
-        total_chunks += len(texts)
+        existing = state.get(source)
+        if existing is None:
+            summary.new_documents += 1
+        else:
+            summary.refreshed_documents += 1
+            summary.deleted_chunks += vector_store.delete_by_ids(existing.ids)
 
-    return total_chunks
+        if not chunks:
+            state.mark_ingested(source, doc_hash, [])
+            continue
+
+        doc_ids: list[int] = []
+        for start in range(0, len(chunks), batch_size):
+            batch = chunks[start : start + batch_size]
+            texts = [chunk["text"] for chunk in batch]
+            metadatas = []
+            for chunk in batch:
+                metadata = dict(chunk["metadata"])
+                metadata["source"] = source
+                metadata["doc_hash"] = doc_hash
+                metadatas.append(metadata)
+            embeddings = embedding_model.embed(texts, batch_size=batch_size)
+            inserted_ids = vector_store.insert(embeddings, texts, metadatas)
+            doc_ids.extend(inserted_ids)
+            summary.inserted_chunks += len(inserted_ids)
+
+        state.mark_ingested(source, doc_hash, doc_ids)
+
+    state.save()
+    return summary

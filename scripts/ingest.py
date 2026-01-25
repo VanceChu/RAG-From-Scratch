@@ -26,9 +26,11 @@ from rag_core.config import (
     DEFAULT_INDEX_NLIST,
     DEFAULT_INDEX_TYPE,
     DEFAULT_MILVUS_URI,
+    DEFAULT_STATE_DIR,
 )
 from rag_core.embeddings import EmbeddingModel
 from rag_core.ingest import ingest_documents
+from rag_core.ingest_state import IngestState
 from rag_core.vector_store import VectorStore
 
 
@@ -142,15 +144,32 @@ def main() -> None:
         index_params=index_params,
     )
 
-    total_chunks = ingest_documents(
+    state = IngestState.load(
+        uri=args.milvus_uri,
+        collection=args.collection,
+        state_dir=DEFAULT_STATE_DIR,
+    )
+    if args.reset:
+        state.clear()
+
+    summary = ingest_documents(
         paths=paths,
         embedding_model=embedding_model,
         vector_store=vector_store,
         chunk_size=args.chunk_size,
         overlap=args.overlap,
         batch_size=args.batch_size,
+        state=state,
     )
-    print(f"Ingested {total_chunks} chunks into {args.collection}.")
+    print(
+        "Ingest summary: "
+        f"new_docs={summary.new_documents} "
+        f"refreshed_docs={summary.refreshed_documents} "
+        f"skipped_docs={summary.skipped_documents} "
+        f"inserted_chunks={summary.inserted_chunks} "
+        f"deleted_chunks={summary.deleted_chunks}"
+    )
+    print(f"State file: {state.path}")
 
 
 if __name__ == "__main__":
