@@ -38,7 +38,7 @@ const INITIAL_MESSAGES: Message[] = [
     id: "m-1",
     role: "assistant",
     content:
-      "Hi! Drop a file or ask a question. I will answer with evidence snippets once the backend is wired.",
+      "Ask a question or upload a file. I will answer with citations once the API is connected.",
     citations: ["Getting started"],
     timestamp: "Just now"
   }
@@ -57,7 +57,7 @@ export default function App() {
   const [uploadStatus, setUploadStatus] = useState<string | null>(null);
 
   const chatTitle = useMemo(() => {
-    return selectedKb ? `Chat · ${selectedKb.name}` : "Chat";
+    return selectedKb ? `Conversation · ${selectedKb.name}` : "Conversation";
   }, [selectedKb]);
 
   const canSend = input.trim().length > 0 && !isSending;
@@ -95,7 +95,7 @@ export default function App() {
         id: `m-${Date.now()}-err`,
         role: "assistant",
         content:
-          "I could not reach the backend. Please check the API server or set VITE_USE_MOCK=false once it is ready.",
+          "I could not reach the backend. Start the API server or set VITE_USE_MOCK=false.",
         citations: ["Connection error"],
         timestamp: formatNow()
       };
@@ -132,138 +132,182 @@ export default function App() {
     }
   };
 
+  const handleClear = () => {
+    setMessages(INITIAL_MESSAGES);
+  };
+
   return (
-    <div className="app">
-      <header className="app-header">
-        <div>
-          <p className="brand">RAG Light Console</p>
-          <h1>Knowledge you can trace.</h1>
+    <div className="page">
+      <header className="topbar">
+        <div className="brand">
+          <span className="wordmark">OpenAI RAG</span>
+          <span className="brand-sub">Research Console</span>
         </div>
-        <div className="status-pill">
-          <span className={USE_MOCK ? "dot warning" : "dot"} />
+        <nav className="nav">
+          <button type="button" className="nav-link">
+            Workspace
+          </button>
+          <button type="button" className="nav-link">
+            Ingest
+          </button>
+          <button type="button" className="nav-link">
+            Ask
+          </button>
+        </nav>
+        <div className="status">
+          <span className="status-dot" />
           {USE_MOCK ? "Mock mode" : "Live API"}
         </div>
       </header>
 
-      <aside className="sidebar">
-        <section className="card">
-          <div className="card-header">
-            <h2>Knowledge Bases</h2>
-            <button className="secondary">New</button>
-          </div>
-          <div className="kb-list">
-            {knowledgeBases.map((kb) => (
-              <button
-                key={kb.id}
-                className={kb.id === selectedKb.id ? "kb active" : "kb"}
-                onClick={() => setSelectedKb(kb)}
-              >
-                <div>
-                  <p className="kb-name">{kb.name}</p>
-                  <p className="kb-meta">
-                    {kb.documents} docs · {kb.updatedAt}
-                  </p>
-                </div>
-                <span className="pill">{kb.id}</span>
-              </button>
-            ))}
-          </div>
-        </section>
-
-        <section className="card upload-card">
-          <h2>Upload Documents</h2>
-          <p className="muted">
-            PDFs, DOCX, MD, TXT, PNG. They will be parsed and indexed.
+      <main className="content">
+        <section className="hero fade-in">
+          <p className="eyebrow">RAG Workspace</p>
+          <h1>Grounded answers for your knowledge base.</h1>
+          <p className="lead">
+            Upload documents, retrieve context, and respond with traceable evidence.
           </p>
-          <label className="upload-zone">
-            <input
-              type="file"
-              multiple
-              onChange={(event) => handleUpload(event.target.files)}
-            />
-            <span>Drag files here or click to upload</span>
-          </label>
-          {uploadStatus && <p className="status">{uploadStatus}</p>}
-        </section>
-
-        <section className="card">
-          <h2>Quality Controls</h2>
-          <div className="stack">
+          <div className="hero-meta">
             <div>
-              <p className="label">Fusion</p>
-              <p className="value">Weighted (alpha 0.5)</p>
+              <span className="meta-label">Active collection</span>
+              <strong>{selectedKb.id}</strong>
             </div>
             <div>
-              <p className="label">Rerank</p>
-              <p className="value">Cross-encoder enabled</p>
-            </div>
-            <div>
-              <p className="label">Index</p>
-              <p className="value">Milvus Lite · FLAT</p>
+              <span className="meta-label">Mode</span>
+              <strong>{USE_MOCK ? "Mock" : "Live API"}</strong>
             </div>
           </div>
         </section>
-      </aside>
 
-      <main className="chat">
-        <div className="chat-header">
-          <div>
-            <p className="title">{chatTitle}</p>
-            <p className="subtitle">Evidence-backed answers from {selectedKb.name}.</p>
-          </div>
-          <button className="secondary">Clear</button>
-        </div>
-
-        <div className="chat-body">
-          {messages.map((message) => (
-            <article
-              key={message.id}
-              className={message.role === "user" ? "bubble user" : "bubble"}
-            >
-              <div className="bubble-meta">
-                <span>{message.role === "user" ? "You" : "Assistant"}</span>
-                <span>{message.timestamp}</span>
+        <section className="grid">
+          <section className="panel conversation fade-in delay-1">
+            <div className="panel-header">
+              <div>
+                <p className="title">{chatTitle}</p>
+                <p className="subtitle">
+                  Evidence-backed answers from {selectedKb.name}.
+                </p>
               </div>
-              <p>{message.content}</p>
-              {message.citations && (
-                <div className="citations">
-                  {message.citations.map((cite) => (
-                    <span key={cite} className="chip">
-                      {cite}
-                    </span>
-                  ))}
-                </div>
+              <button type="button" className="btn ghost" onClick={handleClear}>
+                Clear
+              </button>
+            </div>
+
+            <div className="chat-body">
+              {messages.map((message) => (
+                <article
+                  key={message.id}
+                  className={message.role === "user" ? "bubble user" : "bubble"}
+                >
+                  <div className="bubble-meta">
+                    <span>{message.role === "user" ? "You" : "Assistant"}</span>
+                    <span>{message.timestamp}</span>
+                  </div>
+                  <p>{message.content}</p>
+                  {message.citations && (
+                    <div className="citations">
+                      {message.citations.map((cite) => (
+                        <span key={cite} className="chip">
+                          {cite}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </article>
+              ))}
+              {isSending && (
+                <article className="bubble typing">
+                  <div className="bubble-meta">
+                    <span>Assistant</span>
+                    <span>Thinking</span>
+                  </div>
+                  <p>Retrieving evidence and drafting the response.</p>
+                </article>
               )}
-            </article>
-          ))}
-          {isSending && (
-            <article className="bubble typing">
-              <div className="bubble-meta">
-                <span>Assistant</span>
-                <span>Thinking…</span>
-              </div>
-              <p>Retrieving evidence and drafting the response.</p>
-            </article>
-          )}
-        </div>
-
-        <div className="chat-input">
-          <textarea
-            placeholder="Ask a question about this knowledge base…"
-            value={input}
-            onChange={(event) => setInput(event.target.value)}
-            rows={3}
-          />
-          <div className="actions">
-            <div className="helper">
-              <span>Shift+Enter for newline</span>
-              <span>Collection: {selectedKb.id}</span>
             </div>
-            <button className="primary" onClick={handleSend} disabled={!canSend}>
-              {isSending ? "Sending…" : "Send"}
-            </button>
-          </div>
-        </div>
+
+            <div className="chat-input">
+              <textarea
+                placeholder="Ask a question about this knowledge base..."
+                value={input}
+                onChange={(event) => setInput(event.target.value)}
+                rows={3}
+              />
+              <div className="actions">
+                <div className="helper">
+                  <span>Shift+Enter for newline</span>
+                  <span>Collection: {selectedKb.id}</span>
+                </div>
+                <button type="button" className="btn primary" onClick={handleSend} disabled={!canSend}>
+                  {isSending ? "Sending..." : "Send"}
+                </button>
+              </div>
+            </div>
+          </section>
+
+          <aside className="column">
+            <section className="panel fade-in delay-2">
+              <div className="panel-header">
+                <h2>Knowledge Bases</h2>
+                <button type="button" className="btn ghost">
+                  New
+                </button>
+              </div>
+              <div className="kb-list">
+                {knowledgeBases.map((kb) => (
+                  <button
+                    key={kb.id}
+                    type="button"
+                    className={kb.id === selectedKb.id ? "kb-item active" : "kb-item"}
+                    onClick={() => setSelectedKb(kb)}
+                  >
+                    <div>
+                      <p className="kb-name">{kb.name}</p>
+                      <p className="kb-meta">
+                        {kb.documents} docs · {kb.updatedAt}
+                      </p>
+                    </div>
+                    <span className="kb-tag">{kb.id}</span>
+                  </button>
+                ))}
+              </div>
+            </section>
+
+            <section className="panel fade-in delay-3">
+              <h2>Upload Documents</h2>
+              <p className="muted">
+                PDFs, DOCX, MD, TXT, PNG. The pipeline will parse and index them.
+              </p>
+              <label className="upload-area">
+                <input
+                  type="file"
+                  multiple
+                  onChange={(event) => handleUpload(event.target.files)}
+                />
+                <span>Drop files here or click to upload</span>
+              </label>
+              {uploadStatus && <p className="status-text">{uploadStatus}</p>}
+            </section>
+
+            <section className="panel fade-in delay-3">
+              <h2>Retrieval</h2>
+              <div className="stack">
+                <div>
+                  <p className="label">Fusion</p>
+                  <p className="value">Weighted (alpha 0.5)</p>
+                </div>
+                <div>
+                  <p className="label">Rerank</p>
+                  <p className="value">Cross-encoder enabled</p>
+                </div>
+                <div>
+                  <p className="label">Index</p>
+                  <p className="value">Milvus Lite · FLAT</p>
+                </div>
+              </div>
+            </section>
+          </aside>
+        </section>
       </main>
     </div>
   );
