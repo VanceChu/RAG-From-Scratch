@@ -10,8 +10,9 @@ It turns documents into a searchable knowledge base and answers questions with c
 - Ingests PDF/DOCX/Markdown/text/image files
 - Parses PDFs with DeepDoc (layout, tables, figures, positions)
 - Chunks content with a token-aware splitter and keeps positions
-- Creates embeddings using SentenceTransformers
+- Creates embeddings using Volcengine/OpenAI-compatible APIs or SentenceTransformers
 - Stores and searches vectors in Milvus (HNSW, inner product)
+- Optionally builds a local BM25 index for lexical hybrid retrieval
 - Optionally reranks with a cross-encoder
 - Generates answers with evidence snippets
 
@@ -29,9 +30,13 @@ It turns documents into a searchable knowledge base and answers questions with c
 conda run -n llm python -m pip install -r requirements.txt
 ```
 
-2) Set your OpenAI key (auto-loads `.env`)
+2) Set your API keys (auto-loads `.env`)
 ```bash
-echo "OPENAI_API_KEY=..." > .env
+cat <<'EOF' > .env
+OPENAI_API_KEY=...
+VOLC_API_KEY=...
+VOLC_API_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
+EOF
 ```
 
 3) Ingest documents
@@ -49,6 +54,37 @@ To ask a single question:
 conda run -n llm python scripts/ask.py --query "your question" --index-type FLAT --rerank
 ```
 
+## Smoke Test (Verified)
+This workflow was verified using the multimodal Ark endpoint ID for text-only embeddings.
+Put a small PDF under `data/raw/test/`, then run:
+
+```bash
+conda run -n llm python scripts/ingest.py \
+  --paths data/raw/test \
+  --collection smoke_test \
+  --collection-raw \
+  --index-type FLAT \
+  --enable-bm25 \
+  --embedding-provider volcengine \
+  --embedding-model ep-20260126203123-rhjcv \
+  --embedding-endpoint embeddings/multimodal \
+  --embedding-dim 2048 \
+  --reset
+
+conda run -n llm python scripts/ask.py \
+  --query "What is the relative strength index?" \
+  --collection smoke_test \
+  --collection-raw \
+  --index-type FLAT \
+  --enable-bm25 \
+  --embedding-provider volcengine \
+  --embedding-model ep-20260126203123-rhjcv \
+  --embedding-endpoint embeddings/multimodal \
+  --embedding-dim 2048
+```
+
+Logs are written to `data/index/logs/` when you redirect output.
+
 ## Configuration
 Environment variables are loaded from `.env` at project root (if present).
 
@@ -58,8 +94,13 @@ Environment variables are loaded from `.env` at project root (if present).
 - `RAG_INDEX_NLIST` (default: `128`, IVF only)
 - `RAG_INDEX_M` (default: `8`, HNSW only)
 - `RAG_INDEX_EF_CONSTRUCTION` (default: `64`, HNSW only)
-- `RAG_EMBEDDING_PROVIDER` (default: `sentence-transformers`)
-- `RAG_EMBEDDING_MODEL` (default: `sentence-transformers/all-MiniLM-L6-v2`)
+- `RAG_EMBEDDING_PROVIDER` (default: `volcengine`)
+- `RAG_EMBEDDING_MODEL` (default: `doubao-embedding-large-text-250515`)
+- `RAG_EMBEDDING_API_KEY` (default: empty, for OpenAI-compatible providers)
+- `RAG_EMBEDDING_BASE_URL` (default: empty, for OpenAI-compatible providers)
+- `RAG_EMBEDDING_ENDPOINT` (default: empty; use `embeddings/multimodal` for Ark multimodal endpoint IDs)
+- `VOLC_API_KEY` (default: empty, provider-level key for Volcengine)
+- `VOLC_API_BASE_URL` (default: `https://ark.cn-beijing.volces.com/api/v3`)
 - `RAG_EMBEDDING_DIM` (default: `0`, required for unknown OpenAI models)
 - `RAG_RERANK_MODEL` (default: `cross-encoder/ms-marco-MiniLM-L-6-v2`)
 - `RAG_OPENAI_MODEL` (default: `gpt-5.1`)
@@ -71,6 +112,7 @@ Environment variables are loaded from `.env` at project root (if present).
 - `RAG_BATCH_SIZE` (default: `64`)
 - `RAG_STATE_DIR` (default: `data/index/ingest_state`)
 - `RAG_IMAGE_DIR` (default: `data/index/chunk_images`, images stored under `<base>/<collection>/`)
+- `RAG_BM25_DIR` (default: `data/index/bm25`)
 
 Chunk images are automatically isolated per collection under `RAG_IMAGE_DIR/<collection>/`.
 When the embedding provider/model differs from the defaults, the CLI automatically
@@ -92,6 +134,22 @@ export RAG_EMBEDDING_PROVIDER=openai
 export RAG_EMBEDDING_MODEL=text-embedding-3-small
 ```
 
+Use Volcengine Ark embeddings (OpenAI-compatible):
+```bash
+export RAG_EMBEDDING_PROVIDER=volcengine
+export RAG_EMBEDDING_MODEL=doubao-embedding-large-text-250515
+export RAG_EMBEDDING_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
+export RAG_EMBEDDING_API_KEY=...
+export RAG_EMBEDDING_DIM=4096
+```
+You can also set `VOLC_API_KEY` / `VOLC_API_BASE_URL` at the provider level. When
+`RAG_EMBEDDING_PROVIDER=volcengine`, the embedding client falls back to these
+values if `RAG_EMBEDDING_API_KEY` / `RAG_EMBEDDING_BASE_URL` are unset.
+For Ark multimodal endpoints (endpoint IDs like `ep-...`), set:
+```bash
+export RAG_EMBEDDING_ENDPOINT=embeddings/multimodal
+```
+
 ## CLI Reference
 ### Ingest
 ```bash
@@ -104,15 +162,18 @@ Key flags:
 - `--index-nlist`: IVF_FLAT only
 - `--index-m`: HNSW only
 - `--index-ef-construction`: HNSW only
-- `--embedding-provider`: `sentence-transformers` or `openai`
+- `--embedding-provider`: `sentence-transformers`, `openai`, or `volcengine`
 - `--embedding-model`: embedding model name
+- `--embedding-base-url`: base URL for OpenAI-compatible providers
 - `--embedding-dim`: required for unknown OpenAI models
 - `--milvus-uri`: Milvus settings
 - `--collection`: base collection name (auto-suffixed for non-default embedding models)
 - `--collection-raw`: disable model-based collection suffix
+- `--enable-bm25`: build a local BM25 index for lexical hybrid retrieval
 - `--reset`: drop collection and clear ingest state before ingest
 
 By default, ingest is incremental: unchanged documents are skipped, and changed documents are refreshed.
+If you want BM25 hybrid retrieval, run ingest with `--enable-bm25` to build the local index.
 
 ### Ask
 ```bash
@@ -130,12 +191,19 @@ Key flags:
 - `--index-nlist`: IVF_FLAT only
 - `--index-m`: HNSW only
 - `--index-ef-construction`: HNSW only
-- `--embedding-provider`: `sentence-transformers` or `openai`
+- `--embedding-provider`: `sentence-transformers`, `openai`, or `volcengine`
 - `--embedding-model`: embedding model name
+- `--embedding-base-url`: base URL for OpenAI-compatible providers
 - `--embedding-dim`: required for unknown OpenAI models
 - `--collection`: base collection name (auto-suffixed for non-default embedding models)
 - `--collection-raw`: disable model-based collection suffix
 - `--openai-model`: OpenAI chat model name
+- `--enable-bm25`: enable BM25 hybrid retrieval (uses local BM25 index)
+- `--hybrid-alpha`: weight for dense vs BM25 (0.0 = BM25 only, 1.0 = dense only)
+
+When BM25 is enabled, the pipeline uses the local BM25 index for lexical scoring and
+combines it with dense results using `--hybrid-alpha`.
+If you pass both `--enable-bm25` and `--enable-sparse`, BM25 takes precedence.
 
 ## Milvus Modes
 - Default uses Milvus Lite via `MILVUS_URI=data/index/milvus.db`.
@@ -147,6 +215,7 @@ Key flags:
 - `requirements.txt`: Python dependencies.
 - `data/raw/`: source documents for ingestion (ignored by git).
 - `data/index/`: local indexes/artifacts (Milvus Lite, ingest state, chunk images, ragflow models; ignored by git).
+- `data/index/bm25/`: local BM25 index per collection (ignored by git).
 - `rag_core/__init__.py`: package exports.
 - `rag_core/config.py`: default configuration + env overrides.
 - `rag_core/ragflow_pipeline.py`: RagFlow-based parse + split pipeline.

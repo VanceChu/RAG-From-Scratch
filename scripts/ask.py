@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 from typing import Callable
 
+import time
 # Ensure project root is on sys.path when running as a script.
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -15,13 +16,19 @@ if str(PROJECT_ROOT) not in sys.path:
 from rag_core.answer import answer_question
 from rag_core.config import (
     DEFAULT_COLLECTION,
+    DEFAULT_EMBEDDING_API_KEY,
+    DEFAULT_EMBEDDING_BASE_URL,
     DEFAULT_EMBEDDING_DIM,
+    DEFAULT_EMBEDDING_ENDPOINT,
     DEFAULT_EMBEDDING_MODEL,
     DEFAULT_EMBEDDING_PROVIDER,
+    DEFAULT_VOLC_API_BASE_URL,
+    DEFAULT_VOLC_API_KEY,
     DEFAULT_INDEX_EF_CONSTRUCTION,
     DEFAULT_INDEX_M,
     DEFAULT_INDEX_NLIST,
     DEFAULT_INDEX_TYPE,
+    DEFAULT_BM25_DIR,
     DEFAULT_MILVUS_URI,
     DEFAULT_OPENAI_MODEL,
     DEFAULT_RERANK_MODEL,
@@ -42,6 +49,90 @@ def _ensure_local_milvus_parent(uri: str) -> None:
         return
     path = Path(uri).expanduser()
     path.parent.mkdir(parents=True, exist_ok=True)
+
+
+def _safe_collection_name(name: str) -> str:
+    safe = "".join(ch if ch.isalnum() else "_" for ch in name)
+    return safe or "collection"
+
+
+def _milvus_target(uri: str) -> str:
+    if "://" in uri:
+        return uri
+    return str(Path(uri).expanduser().resolve())
+
+
+def _print_ask_overview(
+    collection_name: str,
+    milvus_uri: str,
+    embedding_provider: str,
+    embedding_model_name: str,
+    embedding_dim: int,
+    embedding_api_key_set: bool,
+    embedding_base_url: str | None,
+    embedding_endpoint: str | None,
+    search_k: int,
+    top_k: int,
+    rerank: bool,
+    rerank_model: str,
+    rerank_top_k: int,
+    stream: bool,
+    interactive: bool,
+    hybrid_alpha: float,
+    enable_sparse: bool,
+    enable_bm25: bool,
+    bm25_path: Path | None,
+) -> None:
+    print("Ask configuration:")
+    print(f"- collection: {collection_name}")
+    print(f"- milvus_uri: {_milvus_target(milvus_uri)}")
+    print(f"- embedding_provider: {embedding_provider}")
+    print(f"- embedding_model: {embedding_model_name}")
+    print(f"- embedding_dim: {embedding_dim}")
+    print(f"- embedding_api_key: {'set' if embedding_api_key_set else 'not set'}")
+    if embedding_base_url:
+        print(f"- embedding_base_url: {embedding_base_url}")
+    if embedding_endpoint:
+        print(f"- embedding_endpoint: {embedding_endpoint}")
+    print(f"- search_k: {search_k}")
+    print(f"- top_k: {top_k}")
+    print(f"- rerank: {rerank}")
+    if rerank:
+        print(f"- rerank_model: {rerank_model}")
+        print(f"- rerank_top_k: {rerank_top_k}")
+    print(f"- stream: {stream}")
+    print(f"- interactive: {interactive}")
+    print(f"- hybrid_alpha: {hybrid_alpha}")
+    print(f"- enable_sparse: {enable_sparse}")
+    print(f"- enable_bm25: {enable_bm25}")
+
+    print("\nInputs:")
+    print(f"- collection: {collection_name}")
+    print(f"- milvus_storage: {_milvus_target(milvus_uri)}")
+    if bm25_path:
+        print(f"- bm25_index_file: {bm25_path}")
+
+    print("\nOutputs:")
+    print("- answer: stdout")
+    print("- evidence: stdout")
+    print()
+
+
+def _print_ask_timing(timing: dict) -> None:
+    if not timing:
+        return
+    retrieve_timing = timing.get("retrieve", {})
+    print("\nTiming:")
+    if retrieve_timing:
+        print(f"embed_query_s: {retrieve_timing.get('embed_query_s', 0.0):.3f}")
+        print(f"dense_search_s: {retrieve_timing.get('dense_search_s', 0.0):.3f}")
+        if "bm25_search_s" in retrieve_timing:
+            print(f"bm25_search_s: {retrieve_timing.get('bm25_search_s', 0.0):.3f}")
+            print(f"merge_s: {retrieve_timing.get('merge_s', 0.0):.3f}")
+        print(f"retrieve_total_s: {retrieve_timing.get('total_s', 0.0):.3f}")
+    print(f"rerank_s: {timing.get('rerank_s', 0.0):.3f}")
+    print(f"llm_s: {timing.get('llm_s', 0.0):.3f}")
+    print(f"total_s: {timing.get('total_s', 0.0):.3f}")
 
 
 def parse_args() -> argparse.Namespace:
@@ -88,12 +179,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--embedding-provider",
         default=DEFAULT_EMBEDDING_PROVIDER,
-        help="Embedding provider: sentence-transformers or openai.",
+        help="Embedding provider: sentence-transformers, openai, or volcengine.",
     )
     parser.add_argument(
         "--embedding-model",
         default=DEFAULT_EMBEDDING_MODEL,
         help="Embedding model name (SentenceTransformers or OpenAI).",
+    )
+    parser.add_argument(
+        "--embedding-base-url",
+        default=DEFAULT_EMBEDDING_BASE_URL,
+        help="Embedding API base URL for OpenAI-compatible providers.",
+    )
+    parser.add_argument(
+        "--embedding-endpoint",
+        default=DEFAULT_EMBEDDING_ENDPOINT,
+        help="Embedding endpoint path (e.g. embeddings/multimodal).",
     )
     parser.add_argument(
         "--embedding-dim",
@@ -151,6 +252,22 @@ def parse_args() -> argparse.Namespace:
         default=True,
         help="Stream answer tokens as they are generated (default: True).",
     )
+    parser.add_argument(
+        "--enable-sparse",
+        action="store_true",
+        help="Enable sparse vector generation using API.",
+    )
+    parser.add_argument(
+        "--enable-bm25",
+        action="store_true",
+        help="Enable BM25 lexical index for hybrid retrieval.",
+    )
+    parser.add_argument(
+        "--hybrid-alpha",
+        type=float,
+        default=0.5,
+        help="Weight for dense search in hybrid search (0.0=lexical, 1.0=dense).",
+    )
     return parser.parse_args()
 
 
@@ -185,23 +302,40 @@ def _answer_once(
     history_turns: int,
     stream: bool,
     on_token: Callable[[str], None] | None,
-) -> tuple[str | None, list[SearchResult]]:
+    sparse_embedding_model: object | None = None,
+    bm25_index: object | None = None,
+    hybrid_alpha: float = 0.5,
+) -> tuple[str | None, list[SearchResult], dict]:
+    timing: dict = {}
+    retrieve_timing: dict = {}
+    total_start = time.perf_counter()
     results = retrieve(
         query=query,
         embedding_model=embedding_model,
         vector_store=vector_store,
         top_k=top_k,
         search_k=search_k,
+        sparse_embedding_model=sparse_embedding_model,
+        bm25_index=bm25_index,
+        hybrid_alpha=hybrid_alpha,
+        timing=retrieve_timing,
     )
+    timing["retrieve"] = retrieve_timing
 
     if reranker and results:
+        rerank_start = time.perf_counter()
         results = reranker.rerank(query, results, top_k=rerank_top_k)
+        timing["rerank_s"] = time.perf_counter() - rerank_start
     else:
         results = results[:top_k]
+        timing["rerank_s"] = 0.0
 
     if not results:
-        return None, []
+        timing["llm_s"] = 0.0
+        timing["total_s"] = time.perf_counter() - total_start
+        return None, [], timing
 
+    llm_start = time.perf_counter()
     answer = answer_question(
         query,
         results,
@@ -211,7 +345,9 @@ def _answer_once(
         stream=stream,
         on_token=on_token,
     )
-    return answer, results
+    timing["llm_s"] = time.perf_counter() - llm_start
+    timing["total_s"] = time.perf_counter() - total_start
+    return answer, results, timing
 
 
 def main() -> None:
@@ -224,12 +360,36 @@ def main() -> None:
     )
 
     _ensure_local_milvus_parent(args.milvus_uri)
+    from pymilvus import connections
+    connections.connect(alias="default", uri=args.milvus_uri)
     embedding_dim = args.embedding_dim if args.embedding_dim and args.embedding_dim > 0 else None
+    embedding_api_key = DEFAULT_EMBEDDING_API_KEY or None
+    embedding_base_url = args.embedding_base_url or None
+    embedding_endpoint = args.embedding_endpoint or None
+    if args.embedding_provider in {"volcengine", "ark"}:
+        if not embedding_api_key:
+            embedding_api_key = DEFAULT_VOLC_API_KEY or None
+        if not embedding_base_url:
+            embedding_base_url = DEFAULT_VOLC_API_BASE_URL or None
     embedding_model = EmbeddingModel(
         args.embedding_model,
         provider=args.embedding_provider,
+        api_key=embedding_api_key,
+        base_url=embedding_base_url,
+        endpoint_path=embedding_endpoint,
         embedding_dim=embedding_dim,
     )
+    
+    sparse_model = None
+    if args.enable_sparse:
+        from rag_core.sparse_embedding import APISparseEmbeddingModel
+        sparse_model = APISparseEmbeddingModel()
+
+    bm25_index = None
+    if args.enable_bm25:
+        from rag_core.bm25_index import BM25Index
+        bm25_index = BM25Index.load(collection=collection_name, base_dir=DEFAULT_BM25_DIR)
+        
     index_params = {
         "nlist": args.index_nlist,
         "M": args.index_m,
@@ -241,6 +401,32 @@ def main() -> None:
         embedding_dim=embedding_model.dimension,
         index_type=args.index_type,
         index_params=index_params,
+    )
+
+    bm25_path = None
+    if args.enable_bm25:
+        bm25_path = DEFAULT_BM25_DIR / f"{_safe_collection_name(collection_name)}.json"
+
+    _print_ask_overview(
+        collection_name=collection_name,
+        milvus_uri=args.milvus_uri,
+        embedding_provider=args.embedding_provider,
+        embedding_model_name=args.embedding_model,
+        embedding_dim=embedding_model.dimension,
+        embedding_api_key_set=bool(embedding_api_key),
+        embedding_base_url=embedding_base_url,
+        embedding_endpoint=embedding_endpoint,
+        search_k=args.search_k,
+        top_k=args.top_k,
+        rerank=args.rerank,
+        rerank_model=args.rerank_model,
+        rerank_top_k=args.rerank_top_k,
+        stream=args.stream,
+        interactive=args.interactive or not args.query,
+        hybrid_alpha=args.hybrid_alpha,
+        enable_sparse=args.enable_sparse,
+        enable_bm25=args.enable_bm25,
+        bm25_path=bm25_path,
     )
 
     if vector_store.collection.num_entities == 0:
@@ -263,7 +449,7 @@ def main() -> None:
                 started_stream = True
             print(token, end="", flush=True)
 
-        answer, results = _answer_once(
+        answer, results, timing = _answer_once(
             query=query,
             embedding_model=embedding_model,
             vector_store=vector_store,
@@ -276,6 +462,9 @@ def main() -> None:
             history_turns=args.history_turns,
             stream=args.stream,
             on_token=on_token if args.stream else None,
+            sparse_embedding_model=sparse_model,
+            bm25_index=bm25_index,
+            hybrid_alpha=args.hybrid_alpha,
         )
         if not results or answer is None:
             print("No relevant context found.")
@@ -290,6 +479,7 @@ def main() -> None:
             print("Answer:")
             print(answer)
         _print_evidence(results)
+        _print_ask_timing(timing)
         history.append((query, answer))
 
     if not interactive_mode and args.query:

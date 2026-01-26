@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
+import time
 
 from rag_core.config import DEFAULT_IMAGE_DIR
 from rag_core.embeddings import EmbeddingModel
@@ -14,6 +15,8 @@ from rag_core.ragflow_pipeline import (
     parse_and_split_document,
 )
 from rag_core.vector_store import VectorStore
+from rag_core.bm25_index import BM25Index
+from rag_core.sparse_embedding import SparseEmbeddingModel
 
 
 def _iter_documents(paths: Iterable[Path]) -> Iterable[Path]:
@@ -46,8 +49,6 @@ class IngestSummary:
     skipped_documents: int = 0
     refreshed_documents: int = 0
     new_documents: int = 0
-
-
 def ingest_documents(
     paths: Iterable[Path],
     embedding_model: EmbeddingModel,
@@ -56,25 +57,61 @@ def ingest_documents(
     overlap: int,
     batch_size: int,
     state: IngestState,
+    sparse_embedding_model: SparseEmbeddingModel | None = None,
+    bm25_index: BM25Index | None = None,
+    timing: dict | None = None,
 ) -> IngestSummary:
     summary = IngestSummary()
     collection_image_dir = DEFAULT_IMAGE_DIR / _safe_collection_name(
         vector_store.collection_name
     )
+    if timing is not None:
+        timing.clear()
+        timing["docs"] = []
+        timing["totals"] = {
+            "parse_split_s": 0.0,
+            "embed_s": 0.0,
+            "insert_s": 0.0,
+            "bm25_s": 0.0,
+            "total_s": 0.0,
+        }
 
     for doc_path in _iter_documents(paths):
+        doc_start = time.perf_counter()
         source = _normalize_source(doc_path)
         doc_hash = state.compute_hash(doc_path)
+        doc_timing = {
+            "source": source,
+            "chunks": 0,
+            "inserted_chunks": 0,
+            "skipped": False,
+            "parse_split_s": 0.0,
+            "embed_s": 0.0,
+            "insert_s": 0.0,
+            "bm25_s": 0.0,
+            "total_s": 0.0,
+        }
         if state.is_unchanged(source, doc_hash, vector_store):
             summary.skipped_documents += 1
+            doc_timing["skipped"] = True
+            doc_timing["total_s"] = time.perf_counter() - doc_start
+            if timing is not None:
+                timing["docs"].append(doc_timing)
+                timing["totals"]["total_s"] += doc_timing["total_s"]
             continue
 
+        parse_start = time.perf_counter()
         chunks = parse_and_split_document(
             path=doc_path,
             chunk_token_size=chunk_size,
             overlap_tokens=overlap,
             image_dir=collection_image_dir,
         )
+        parse_elapsed = time.perf_counter() - parse_start
+        doc_timing["parse_split_s"] = parse_elapsed
+        doc_timing["chunks"] = len(chunks)
+        if timing is not None:
+            timing["totals"]["parse_split_s"] += parse_elapsed
 
         existing = state.get(source)
         if existing is None:
@@ -82,9 +119,15 @@ def ingest_documents(
         else:
             summary.refreshed_documents += 1
             summary.deleted_chunks += vector_store.delete_by_ids(existing.ids)
+            if bm25_index:
+                bm25_index.remove(existing.ids)
 
         if not chunks:
             state.mark_ingested(source, doc_hash, [])
+            doc_timing["total_s"] = time.perf_counter() - doc_start
+            if timing is not None:
+                timing["docs"].append(doc_timing)
+                timing["totals"]["total_s"] += doc_timing["total_s"]
             continue
 
         doc_ids: list[int] = []
@@ -97,12 +140,42 @@ def ingest_documents(
                 metadata["source"] = source
                 metadata["doc_hash"] = doc_hash
                 metadatas.append(metadata)
+
+            embed_start = time.perf_counter()
             embeddings = embedding_model.embed(texts, batch_size=batch_size)
-            inserted_ids = vector_store.insert(embeddings, texts, metadatas)
+            embed_elapsed = time.perf_counter() - embed_start
+            doc_timing["embed_s"] += embed_elapsed
+            if timing is not None:
+                timing["totals"]["embed_s"] += embed_elapsed
+            
+            sparse_vectors = None
+            if sparse_embedding_model:
+                sparse_vectors = sparse_embedding_model.embed_sparse(texts)
+
+            insert_start = time.perf_counter()
+            inserted_ids = vector_store.insert(embeddings, texts, metadatas, sparse_vectors=sparse_vectors)
+            insert_elapsed = time.perf_counter() - insert_start
+            doc_timing["insert_s"] += insert_elapsed
+            if timing is not None:
+                timing["totals"]["insert_s"] += insert_elapsed
             doc_ids.extend(inserted_ids)
             summary.inserted_chunks += len(inserted_ids)
+            if bm25_index:
+                bm25_start = time.perf_counter()
+                bm25_index.add(inserted_ids, texts, metadatas)
+                bm25_elapsed = time.perf_counter() - bm25_start
+                doc_timing["bm25_s"] += bm25_elapsed
+                if timing is not None:
+                    timing["totals"]["bm25_s"] += bm25_elapsed
 
         state.mark_ingested(source, doc_hash, doc_ids)
+        doc_timing["inserted_chunks"] = len(doc_ids)
+        doc_timing["total_s"] = time.perf_counter() - doc_start
+        if timing is not None:
+            timing["docs"].append(doc_timing)
+            timing["totals"]["total_s"] += doc_timing["total_s"]
 
     state.save()
+    if bm25_index:
+        bm25_index.save()
     return summary

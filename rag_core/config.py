@@ -87,17 +87,26 @@ DEFAULT_INDEX_TYPE = _env_str("RAG_INDEX_TYPE", "HNSW")
 DEFAULT_INDEX_NLIST = _env_int("RAG_INDEX_NLIST", 128)
 DEFAULT_INDEX_M = _env_int("RAG_INDEX_M", 8)
 DEFAULT_INDEX_EF_CONSTRUCTION = _env_int("RAG_INDEX_EF_CONSTRUCTION", 64)
-DEFAULT_EMBEDDING_PROVIDER = _env_str(
-    "RAG_EMBEDDING_PROVIDER", "sentence-transformers"
-)
+DEFAULT_EMBEDDING_PROVIDER = _env_str("RAG_EMBEDDING_PROVIDER", "volcengine")
 DEFAULT_EMBEDDING_MODEL = _env_str(
-    "RAG_EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2"
+    "RAG_EMBEDDING_MODEL", "doubao-embedding-large-text-250515"
+)
+DEFAULT_EMBEDDING_API_KEY = _env_str("RAG_EMBEDDING_API_KEY", "")
+DEFAULT_EMBEDDING_BASE_URL = _env_str("RAG_EMBEDDING_BASE_URL", "")
+DEFAULT_EMBEDDING_ENDPOINT = _env_str("RAG_EMBEDDING_ENDPOINT", "")
+DEFAULT_VOLC_API_KEY = _env_str("VOLC_API_KEY", "")
+DEFAULT_VOLC_API_BASE_URL = _env_str(
+    "VOLC_API_BASE_URL", "https://ark.cn-beijing.volces.com/api/v3"
 )
 DEFAULT_EMBEDDING_DIM = _env_int("RAG_EMBEDDING_DIM", 0)
 DEFAULT_RERANK_MODEL = _env_str(
     "RAG_RERANK_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2"
 )
 DEFAULT_OPENAI_MODEL = _env_str("RAG_OPENAI_MODEL", "gpt-5.1")
+
+DEFAULT_SPARSE_PROVIDER = _env_str("RAG_SPARSE_PROVIDER", "api")
+DEFAULT_SPARSE_API_URL = _env_str("RAG_SPARSE_API_URL", "https://api.siliconflow.cn/v1/embeddings")
+DEFAULT_SPARSE_API_KEY = _env_str("RAG_SPARSE_API_KEY", "")
 
 DEFAULT_CHUNK_SIZE = _env_int("RAG_CHUNK_SIZE", 800)
 DEFAULT_CHUNK_OVERLAP = _env_int("RAG_CHUNK_OVERLAP", 120)
@@ -107,3 +116,4 @@ DEFAULT_RERANK_TOP_K = _env_int("RAG_RERANK_TOP_K", 5)
 DEFAULT_BATCH_SIZE = _env_int("RAG_BATCH_SIZE", 64)
 DEFAULT_IMAGE_DIR = _env_path("RAG_IMAGE_DIR", "data/index/chunk_images")
 DEFAULT_STATE_DIR = _env_path("RAG_STATE_DIR", "data/index/ingest_state")
+DEFAULT_BM25_DIR = _env_path("RAG_BM25_DIR", "data/index/bm25")

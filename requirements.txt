@@ -2,7 +2,8 @@ python-dotenv
 openai
 pypdf>=4.2.0
 tiktoken
-pymilvus>=2.3.0
+pymilvus>=2.4.0
+milvus-lite>=2.4.0
 sentence-transformers
 numpy>=1.26.0
 pandas
@@ -79,5 +80,5 @@ pycryptodomex
 google-genai
 PyPDF2
 tencentcloud-sdk-python
-milvus-lite
+
 xgboost<3.0

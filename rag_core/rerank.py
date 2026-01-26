@@ -25,6 +25,11 @@ class Reranker:
         )
         trimmed = reranked[:top_k] if top_k > 0 else reranked
         return [
-            SearchResult(text=result.text, metadata=result.metadata, score=float(score))
+            SearchResult(
+                text=result.text,
+                metadata=result.metadata,
+                score=float(score),
+                id=result.id,
+            )
             for result, score in trimmed
         ]

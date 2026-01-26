@@ -20,6 +20,7 @@ class SearchResult:
     text: str
     metadata: dict
     score: float
+    id: int | None = None
 
 
 class VectorStore:
@@ -39,6 +40,7 @@ class VectorStore:
         self.index_params = index_params or {}
         self.metric_type = metric_type.upper()
         self._collection: Optional[Collection] = None
+        self._has_sparse_vector: bool = False
         self._connect()
         self._ensure_collection()
 
@@ -92,15 +94,12 @@ class VectorStore:
                     "Embedding dimension mismatch for existing collection: "
                     f"{vector_field.params.get('dim')} != {self.embedding_dim}"
                 )
-            if collection.indexes:
-                index_params = collection.indexes[0].params or {}
-                detected_type = (
-                    index_params.get("index_type")
-                    or index_params.get("indexType")
-                    or getattr(collection.indexes[0], "index_type", None)
-                )
-                if detected_type:
-                    self.index_type = self._normalize_index_type(str(detected_type))
+            # Check for sparse vector field existence
+            sparse_field = next(
+                (field for field in schema.fields if field.name == "sparse_vector"), None
+            )
+            self._has_sparse_vector = sparse_field is not None
+
             collection.load()
             self._collection = collection
             return
@@ -118,6 +117,10 @@ class VectorStore:
                 dim=self.embedding_dim,
             ),
             FieldSchema(
+                name="sparse_vector",
+                dtype=DataType.SPARSE_FLOAT_VECTOR,
+            ),
+            FieldSchema(
                 name="text",
                 dtype=DataType.VARCHAR,
                 max_length=65535,
@@ -129,12 +132,22 @@ class VectorStore:
         ]
         schema = CollectionSchema(fields, description="RAG chunks")
         collection = Collection(self.collection_name, schema)
+        
+        # Dense Index
         collection.create_index(
             field_name="embedding",
             index_params=self._build_index_params(),
         )
+        
+        # Sparse Index
+        collection.create_index(
+            field_name="sparse_vector",
+            index_params={"index_type": "SPARSE_INVERTED_INDEX", "metric_type": "IP"},
+        )
+
         collection.load()
         self._collection = collection
+        self._has_sparse_vector = True
 
     @property
     def collection(self) -> Collection:
@@ -147,12 +160,28 @@ class VectorStore:
         embeddings: list[list[float]],
         texts: list[str],
         metadatas: list[dict],
+        sparse_vectors: list[dict[int, float]] | None = None,
     ) -> list[int]:
         if not (len(embeddings) == len(texts) == len(metadatas)):
             raise ValueError("Embeddings, texts, and metadatas must be the same length")
+
         if not embeddings:
             return []
-        mutation = self.collection.insert([embeddings, texts, metadatas])
+
+        if self._has_sparse_vector:
+            if sparse_vectors is None:
+                # Sparse vectors cannot be null; empty dicts are allowed.
+                sparse_vectors = [{} for _ in texts]
+            if len(sparse_vectors) != len(texts):
+                raise ValueError("sparse_vectors length must match texts length")
+            mutation = self.collection.insert([embeddings, sparse_vectors, texts, metadatas])
+        else:
+            if sparse_vectors is not None:
+                raise ValueError(
+                    "sparse_vectors provided but collection has no sparse_vector field. "
+                    "Recreate the collection with sparse support or omit sparse embeddings."
+                )
+            mutation = self.collection.insert([embeddings, texts, metadatas])
         self.collection.flush()
         primary_keys = getattr(mutation, "primary_keys", None) or []
         return [int(key) for key in primary_keys]
@@ -186,20 +215,72 @@ class VectorStore:
         embedding: list[float],
         limit: int,
         expr: Optional[str] = None,
+        sparse_vector: dict[int, float] | None = None,
+        hybrid_alpha: float = 0.5,
     ) -> list[SearchResult]:
+        """
+        Perform search. If sparse_vector is provided, performs Hybrid Search (Dense + Sparse).
+        """
         if limit <= 0:
             return []
-        search_params = self._build_search_params(limit)
-        hits = self.collection.search(
-            data=[embedding],
-            anns_field="embedding",
-            param=search_params,
-            limit=limit,
-            expr=expr,
-            output_fields=["text", "metadata"],
-        )
+
+        # Pure Dense Search
+        if not sparse_vector:
+            search_params = self._build_search_params(limit)
+            hits = self.collection.search(
+                data=[embedding],
+                anns_field="embedding",
+                param=search_params,
+                limit=limit,
+                expr=expr,
+                output_fields=["text", "metadata"],
+            )[0]
+            
+        else:
+            if not self._has_sparse_vector:
+                raise ValueError(
+                    "Hybrid search requested but collection has no sparse_vector field. "
+                    "Recreate the collection with sparse support."
+                )
+            # Hybrid Search
+            from pymilvus import AnnSearchRequest, WeightedRanker
+            
+            # 1. Dense Request
+            search_param_dense = self._build_search_params(limit)
+            req_dense = AnnSearchRequest(
+                data=[embedding],
+                anns_field="embedding",
+                param=search_param_dense,
+                limit=limit,
+                expr=expr
+            )
+            
+            # 2. Sparse Request
+            req_sparse = AnnSearchRequest(
+                data=[sparse_vector],
+                anns_field="sparse_vector",
+                param={"metric_type": "IP", "params": {}}, # Sparse typically uses IP
+                limit=limit,
+                expr=expr
+            )
+            
+            # 3. Hybrid Search
+            # Adjust weights based on hybrid_alpha (0.0 = pure sparse, 1.0 = pure dense)
+            # Actually WeightedRanker takes simple weights.
+            # Let's say weight_dense = alpha, weight_sparse = 1 - alpha
+            w_dense = hybrid_alpha
+            w_sparse = 1.0 - hybrid_alpha
+            ranker = WeightedRanker(w_dense, w_sparse)
+            
+            hits = self.collection.hybrid_search(
+                reqs=[req_dense, req_sparse],
+                rerank=ranker,
+                limit=limit,
+                output_fields=["text", "metadata"]
+            )[0]
+
         results: list[SearchResult] = []
-        for hit in hits[0]:
+        for hit in hits:
             entity = getattr(hit, "entity", None)
             text = (
                 entity.get("text")
@@ -211,7 +292,21 @@ class VectorStore:
                 if entity is not None
                 else hit.get("metadata")  # type: ignore[call-arg]
             )
+            hit_id = getattr(hit, "id", None)
+            if hit_id is None:
+                hit_id = getattr(hit, "pk", None)
+            if hit_id is None and entity is not None:
+                hit_id = entity.get("id")
+            try:
+                hit_id = int(hit_id) if hit_id is not None else None
+            except (TypeError, ValueError):
+                hit_id = None
             results.append(
-                SearchResult(text=text, metadata=metadata, score=float(hit.distance))
+                SearchResult(
+                    text=text,
+                    metadata=metadata,
+                    score=float(hit.distance),
+                    id=hit_id,
+                )
             )
         return results
