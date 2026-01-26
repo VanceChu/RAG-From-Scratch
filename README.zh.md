@@ -12,7 +12,7 @@
 - 使用 token 级切分并保留位置
 - 使用 SentenceTransformers 生成向量
 - 使用 Milvus 存储与检索（HNSW + 内积）
-- 可选 cross-encoder 重排
+- 默认开启 cross-encoder 重排（可用 `--no-rerank` 关闭）
 - 输出答案与证据片段
 
 ## 工作流程（概览）
@@ -20,7 +20,7 @@
 2) 进行 token 切分并保存图片裁剪
 3) 向量写入 Milvus
 4) 查询向量化并检索
-5)（可选）重排结果
+5) 重排结果（默认开启）
 6) 拼接上下文并生成回答
 
 ## 快速开始
@@ -41,34 +41,58 @@ python scripts/ingest.py --paths data/docs
 
 4) 问答
 ```bash
-python scripts/ask.py --query "你的问题" --search-k 20 --top-k 5 --rerank
+python scripts/ask.py --query "你的问题" --search-k 20 --top-k 5
 ```
+重排默认开启，如需关闭可加 `--no-rerank`。
+如果想交互式配置参数，可使用下面的向导模式。
 
 ## 配置
 环境变量会自动从项目根目录 `.env` 读取。
 
 - `RAG_COLLECTION`（默认：`rag_chunks`）
-- `MILVUS_URI`（默认：`data/milvus.db`）
-- `RAG_INDEX_TYPE`（默认：`HNSW`，Lite 支持 `FLAT`、`IVF_FLAT`、`AUTOINDEX`）
+- `MILVUS_URI`（默认：`data/index/milvus.db`）
+- `RAG_INDEX_TYPE`（默认：`FLAT`，Lite 支持 `FLAT`、`IVF_FLAT`、`AUTOINDEX`）
 - `RAG_INDEX_NLIST`（默认：`128`，仅 IVF）
 - `RAG_INDEX_M`（默认：`8`，仅 HNSW）
 - `RAG_INDEX_EF_CONSTRUCTION`（默认：`64`，仅 HNSW）
-- `RAG_EMBEDDING_PROVIDER`（默认：`sentence-transformers`）
-- `RAG_EMBEDDING_MODEL`（默认：`sentence-transformers/all-MiniLM-L6-v2`）
-- `RAG_EMBEDDING_DIM`（默认：`0`，OpenAI 未知模型需要设置）
+- `RAG_EMBEDDING_PROVIDER`（默认：`volcengine`）
+- `RAG_EMBEDDING_MODEL`（默认：`ep-20260126203123-rhjcv`）
+- `RAG_EMBEDDING_API_KEY`（默认：空，OpenAI 兼容接口用）
+- `RAG_EMBEDDING_BASE_URL`（默认：空，OpenAI 兼容接口用）
+- `RAG_EMBEDDING_ENDPOINT`（默认：`embeddings/multimodal`）
+- `VOLC_API_KEY`（默认：空）
+- `VOLC_API_BASE_URL`（默认：`https://ark.cn-beijing.volces.com/api/v3`）
+- `RAG_EMBEDDING_DIM`（默认：`2048`）
+- `RAG_SPARSE_PROVIDER`（默认：`api`）
+- `RAG_SPARSE_API_URL`（默认：`https://api.siliconflow.cn/v1/embeddings`）
+- `RAG_SPARSE_API_KEY`（默认：空）
 - `RAG_RERANK_MODEL`（默认：`cross-encoder/ms-marco-MiniLM-L-6-v2`）
-- `RAG_OPENAI_MODEL`（默认：`gpt-4o-mini`）
+- `RAG_OPENAI_MODEL`（默认：`gpt-5.1`）
+- `RAG_RERANK_ENABLED`（默认：`true`）
+- `RAG_HISTORY_TURNS`（默认：`3`）
+- `RAG_STREAM`（默认：`true`）
+- `RAG_INTERACTIVE`（默认：`false`）
 - `RAG_CHUNK_SIZE`（默认：`800`，token）
 - `RAG_CHUNK_OVERLAP`（默认：`120`，token）
 - `RAG_TOP_K`（默认：`5`）
 - `RAG_SEARCH_K`（默认：`20`）
 - `RAG_RERANK_TOP_K`（默认：`5`）
 - `RAG_BATCH_SIZE`（默认：`64`）
-- `RAG_IMAGE_DIR`（默认：`data/chunk_images`）
+- `RAG_ENABLE_BM25`（默认：`false`）
+- `RAG_ENABLE_SPARSE`（默认：`false`）
+- `RAG_FUSION`（默认：`weighted`）
+- `RAG_RRF_K`（默认：`60`）
+- `RAG_HYBRID_ALPHA`（默认：`0.5`）
+- `RAG_COLLECTION_RAW`（默认：`false`）
+- `RAG_RESET`（默认：`false`）
+- `RAG_STATE_DIR`（默认：`data/index/ingest_state`）
+- `RAG_IMAGE_DIR`（默认：`data/index/chunk_images`）
+- `RAG_BM25_DIR`（默认：`data/index/bm25`）
 
-Milvus Lite 只支持部分索引类型，本地 `data/milvus.db` 建议设置：
+Milvus Lite 只支持部分索引类型，本地 `data/milvus.db` 默认使用 `FLAT`。
+如需在 Milvus 服务端使用 HNSW，可设置：
 ```bash
-export RAG_INDEX_TYPE=FLAT
+export RAG_INDEX_TYPE=HNSW
 ```
 
 使用 OpenAI 向量化（避免本地模型下载）：
@@ -78,6 +102,12 @@ export RAG_EMBEDDING_MODEL=text-embedding-3-small
 ```
 
 ## CLI 入口
+### 向导
+```bash
+python scripts/ingest.py --wizard
+python scripts/ask.py --wizard
+```
+
 ### 入库
 ```bash
 python scripts/ingest.py --paths <files_or_dirs> [--reset]
@@ -91,27 +121,45 @@ python scripts/ingest.py --paths <files_or_dirs> [--reset]
 - `--index-ef-construction`：仅 HNSW
 - `--embedding-provider`：`sentence-transformers` 或 `openai`
 - `--embedding-model`：向量模型
+- `--embedding-base-url`：OpenAI 兼容接口的 base URL
+- `--embedding-endpoint`：Embedding endpoint（如 `embeddings/multimodal`）
 - `--embedding-dim`：OpenAI 未知模型需要设置
 - `--milvus-uri`、`--collection`：Milvus 配置
+- `--collection-raw`：禁用模型后缀
+- `--enable-bm25`：构建 BM25 词法索引
+- `--enable-sparse`：生成稀疏向量
 - `--reset`：入库前删除集合
 
 ### 问答
 ```bash
-python scripts/ask.py --query "..." [--rerank]
+python scripts/ask.py --query "..." [--no-rerank]
 ```
 主要参数：
 - `--query`：问题文本
 - `--search-k`：检索候选数量
 - `--top-k`：进入上下文的最终 chunk 数
-- `--rerank`：是否重排
+- `--rerank`/`--no-rerank`：开启/关闭重排（默认开启）
 - `--index-type`：HNSW、IVF_FLAT、FLAT、AUTOINDEX
 - `--index-nlist`：仅 IVF
 - `--index-m`：仅 HNSW
 - `--index-ef-construction`：仅 HNSW
 - `--embedding-provider`：`sentence-transformers` 或 `openai`
 - `--embedding-model`：向量模型
+- `--embedding-base-url`：OpenAI 兼容接口的 base URL
+- `--embedding-endpoint`：Embedding endpoint（如 `embeddings/multimodal`）
 - `--embedding-dim`：OpenAI 未知模型需要设置
+- `--collection`/`--collection-raw`：集合配置
 - `--openai-model`：OpenAI 模型
+- `--stream`/`--no-stream`：流式输出
+- `--interactive`：强制交互模式
+- `--history-turns`：历史轮数
+- `--enable-bm25`：启用 BM25 词法检索（本地索引）
+- `--enable-sparse`：启用稀疏向量检索
+- `--fusion`：BM25 融合策略：`weighted`、`rrf`、`dense`
+- `--rrf-k`：RRF 的 k 参数（仅 `--fusion rrf`）
+- `--hybrid-alpha`：混合检索的 dense 权重（0.0=BM25/稀疏，1.0=仅 Dense）
+
+启用 BM25 后可选择融合方式：`weighted`（归一化加权）、`rrf`（排名融合）。`dense` 会忽略 BM25。
 
 ## Milvus 运行模式
 - 默认使用 Milvus Lite（`MILVUS_URI=data/milvus.db`）。

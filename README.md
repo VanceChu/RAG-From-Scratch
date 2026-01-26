@@ -13,7 +13,7 @@ It turns documents into a searchable knowledge base and answers questions with c
 - Creates embeddings using Volcengine/OpenAI-compatible APIs or SentenceTransformers
 - Stores and searches vectors in Milvus (HNSW, inner product)
 - Optionally builds a local BM25 index for lexical hybrid retrieval
-- Optionally reranks with a cross-encoder
+- Reranks with a cross-encoder by default (disable with `--no-rerank`)
 - Generates answers with evidence snippets
 
 ## How it works (high level)
@@ -21,7 +21,7 @@ It turns documents into a searchable knowledge base and answers questions with c
 2) Split into token-sized chunks and persist image crops
 3) Store vectors in Milvus
 4) Embed the query and retrieve top matches
-5) (Optional) rerank results
+5) Rerank results (enabled by default)
 6) Build a prompt and generate an answer
 
 ## Quickstart
@@ -47,12 +47,14 @@ Re-running ingest without `--reset` performs incremental updates and persists st
 
 4) Ask questions (interactive by default)
 ```bash
-conda run -n llm python scripts/ask.py --index-type FLAT --rerank
+conda run -n llm python scripts/ask.py --index-type FLAT
 ```
 To ask a single question:
 ```bash
-conda run -n llm python scripts/ask.py --query "your question" --index-type FLAT --rerank
+conda run -n llm python scripts/ask.py --query "your question" --index-type FLAT
 ```
+Reranking is enabled by default; add `--no-rerank` to disable it.
+Prefer guided setup? Use the interactive wizard flags below.
 
 ## Smoke Test (Verified)
 This workflow was verified using the multimodal Ark endpoint ID for text-only embeddings.
@@ -90,26 +92,40 @@ Environment variables are loaded from `.env` at project root (if present).
 
 - `RAG_COLLECTION` (default: `rag_chunks`, treated as a base name)
 - `MILVUS_URI` (default: `data/index/milvus.db`)
-- `RAG_INDEX_TYPE` (default: `HNSW`, Lite supports `FLAT`, `IVF_FLAT`, `AUTOINDEX`)
+- `RAG_INDEX_TYPE` (default: `FLAT`, Lite supports `FLAT`, `IVF_FLAT`, `AUTOINDEX`)
 - `RAG_INDEX_NLIST` (default: `128`, IVF only)
 - `RAG_INDEX_M` (default: `8`, HNSW only)
 - `RAG_INDEX_EF_CONSTRUCTION` (default: `64`, HNSW only)
 - `RAG_EMBEDDING_PROVIDER` (default: `volcengine`)
-- `RAG_EMBEDDING_MODEL` (default: `doubao-embedding-large-text-250515`)
+- `RAG_EMBEDDING_MODEL` (default: `ep-20260126203123-rhjcv`)
 - `RAG_EMBEDDING_API_KEY` (default: empty, for OpenAI-compatible providers)
 - `RAG_EMBEDDING_BASE_URL` (default: empty, for OpenAI-compatible providers)
-- `RAG_EMBEDDING_ENDPOINT` (default: empty; use `embeddings/multimodal` for Ark multimodal endpoint IDs)
+- `RAG_EMBEDDING_ENDPOINT` (default: `embeddings/multimodal`)
 - `VOLC_API_KEY` (default: empty, provider-level key for Volcengine)
 - `VOLC_API_BASE_URL` (default: `https://ark.cn-beijing.volces.com/api/v3`)
-- `RAG_EMBEDDING_DIM` (default: `0`, required for unknown OpenAI models)
+- `RAG_EMBEDDING_DIM` (default: `2048`)
+- `RAG_SPARSE_PROVIDER` (default: `api`)
+- `RAG_SPARSE_API_URL` (default: `https://api.siliconflow.cn/v1/embeddings`)
+- `RAG_SPARSE_API_KEY` (default: empty)
 - `RAG_RERANK_MODEL` (default: `cross-encoder/ms-marco-MiniLM-L-6-v2`)
 - `RAG_OPENAI_MODEL` (default: `gpt-5.1`)
+- `RAG_RERANK_ENABLED` (default: `true`)
+- `RAG_HISTORY_TURNS` (default: `3`)
+- `RAG_STREAM` (default: `true`)
+- `RAG_INTERACTIVE` (default: `false`)
 - `RAG_CHUNK_SIZE` (default: `800`, tokens)
 - `RAG_CHUNK_OVERLAP` (default: `120`, tokens)
 - `RAG_TOP_K` (default: `5`)
 - `RAG_SEARCH_K` (default: `20`)
 - `RAG_RERANK_TOP_K` (default: `5`)
 - `RAG_BATCH_SIZE` (default: `64`)
+- `RAG_ENABLE_BM25` (default: `false`)
+- `RAG_ENABLE_SPARSE` (default: `false`)
+- `RAG_FUSION` (default: `weighted`)
+- `RAG_RRF_K` (default: `60`)
+- `RAG_HYBRID_ALPHA` (default: `0.5`)
+- `RAG_COLLECTION_RAW` (default: `false`)
+- `RAG_RESET` (default: `false`)
 - `RAG_STATE_DIR` (default: `data/index/ingest_state`)
 - `RAG_IMAGE_DIR` (default: `data/index/chunk_images`, images stored under `<base>/<collection>/`)
 - `RAG_BM25_DIR` (default: `data/index/bm25`)
@@ -123,9 +139,10 @@ Recommended local layout:
 - `data/raw/`: source documents you ingest
 - `data/index/`: local indexes and artifacts (Milvus Lite DB, ingest state, chunk images, ragflow models)
 
-Milvus Lite uses a limited set of index types. For local `data/index/milvus.db`, set:
+Milvus Lite uses a limited set of index types; the default is `FLAT` for local
+`data/index/milvus.db`. If you switch to a Milvus server and want HNSW:
 ```bash
-export RAG_INDEX_TYPE=FLAT
+export RAG_INDEX_TYPE=HNSW
 ```
 
 Use OpenAI embeddings (no local model download):
@@ -151,6 +168,12 @@ export RAG_EMBEDDING_ENDPOINT=embeddings/multimodal
 ```
 
 ## CLI Reference
+### Wizard
+```bash
+conda run -n llm python scripts/ingest.py --wizard
+conda run -n llm python scripts/ask.py --wizard
+```
+
 ### Ingest
 ```bash
 conda run -n llm python scripts/ingest.py --paths <files_or_dirs> [--reset]
@@ -165,11 +188,13 @@ Key flags:
 - `--embedding-provider`: `sentence-transformers`, `openai`, or `volcengine`
 - `--embedding-model`: embedding model name
 - `--embedding-base-url`: base URL for OpenAI-compatible providers
+- `--embedding-endpoint`: embedding endpoint path (e.g. `embeddings/multimodal`)
 - `--embedding-dim`: required for unknown OpenAI models
 - `--milvus-uri`: Milvus settings
 - `--collection`: base collection name (auto-suffixed for non-default embedding models)
 - `--collection-raw`: disable model-based collection suffix
 - `--enable-bm25`: build a local BM25 index for lexical hybrid retrieval
+- `--enable-sparse`: generate sparse vectors via API for hybrid search
 - `--reset`: drop collection and clear ingest state before ingest
 
 By default, ingest is incremental: unchanged documents are skipped, and changed documents are refreshed.
@@ -177,13 +202,13 @@ If you want BM25 hybrid retrieval, run ingest with `--enable-bm25` to build the 
 
 ### Ask
 ```bash
-conda run -n llm python scripts/ask.py [--query "..."] [--rerank]
+conda run -n llm python scripts/ask.py [--query "..."] [--no-rerank]
 ```
 Key flags:
 - `--query`: question text (optional; interactive mode starts if omitted)
 - `--search-k`: retrieve this many chunks before rerank
 - `--top-k`: number of chunks used in the final context
-- `--rerank`: enable cross-encoder reranking
+- `--rerank`/`--no-rerank`: enable or disable cross-encoder reranking (default: enabled)
 - `--stream`, `--no-stream`: stream tokens during generation (default: stream)
 - `--interactive`: force interactive mode even when `--query` is provided
 - `--history-turns`: number of recent turns included in the prompt
@@ -194,15 +219,20 @@ Key flags:
 - `--embedding-provider`: `sentence-transformers`, `openai`, or `volcengine`
 - `--embedding-model`: embedding model name
 - `--embedding-base-url`: base URL for OpenAI-compatible providers
+- `--embedding-endpoint`: embedding endpoint path (e.g. `embeddings/multimodal`)
 - `--embedding-dim`: required for unknown OpenAI models
 - `--collection`: base collection name (auto-suffixed for non-default embedding models)
 - `--collection-raw`: disable model-based collection suffix
 - `--openai-model`: OpenAI chat model name
 - `--enable-bm25`: enable BM25 hybrid retrieval (uses local BM25 index)
-- `--hybrid-alpha`: weight for dense vs BM25 (0.0 = BM25 only, 1.0 = dense only)
+- `--enable-sparse`: enable sparse embeddings for hybrid search
+- `--fusion`: fusion strategy when BM25 is enabled: `weighted`, `rrf`, or `dense`
+- `--rrf-k`: RRF k parameter (only for `--fusion rrf`)
+- `--hybrid-alpha`: dense weight for hybrid search (0.0 = BM25/sparse, 1.0 = dense)
 
-When BM25 is enabled, the pipeline uses the local BM25 index for lexical scoring and
-combines it with dense results using `--hybrid-alpha`.
+When BM25 is enabled, the pipeline can fuse dense + BM25 results using
+`--fusion weighted` (score normalization + `--hybrid-alpha`) or `--fusion rrf`
+(rank fusion with `--rrf-k`). Use `--fusion dense` to ignore BM25 even if enabled.
 If you pass both `--enable-bm25` and `--enable-sparse`, BM25 takes precedence.
 
 ## Milvus Modes

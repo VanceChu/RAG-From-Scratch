@@ -31,6 +31,7 @@
 
 ## Commit & Pull Request Guidelines
 - Commit messages must follow Conventional Commits (e.g., `feat: add rerank toggle`, `fix: handle empty docs`).
+- Commit messages must be detailed: include a scope when applicable and add a brief body for non-trivial changes (what/why).
 - Existing history predates this rule; new commits should comply strictly.
 - Keep subjects short and imperative; keep commits focused by area (ingest, retrieval, rerank, docs).
 - PRs should describe the dataset used, any config changes (do not commit `.env`), and include the exact CLI commands to reproduce results.
