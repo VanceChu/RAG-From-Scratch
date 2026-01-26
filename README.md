@@ -235,6 +235,32 @@ When BM25 is enabled, the pipeline can fuse dense + BM25 results using
 (rank fusion with `--rrf-k`). Use `--fusion dense` to ignore BM25 even if enabled.
 If you pass both `--enable-bm25` and `--enable-sparse`, BM25 takes precedence.
 
+## API Server (FastAPI)
+Run the lightweight API for the frontend:
+
+```bash
+conda run -n llm python scripts/api.py
+# or: conda run -n llm uvicorn scripts.api:app --reload
+```
+
+Endpoints:
+- `POST /ingest` (multipart form-data): files + collection config
+- `POST /query` (JSON): query + collection config
+
+## Lightweight Frontend (React + TypeScript)
+The lightweight UI lives under `frontend/` and provides a chat workspace plus file upload.
+It runs in mock mode by default.
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Environment variables (optional):
+- `VITE_API_BASE_URL` (default: `http://localhost:8000`)
+- `VITE_USE_MOCK` (default: `true`; set to `false` to call the API)
+
 ## Milvus Modes
 - Default uses Milvus Lite via `MILVUS_URI=data/index/milvus.db`.
 - For a server, set `MILVUS_URI=http://localhost:19530` and start Milvus separately.

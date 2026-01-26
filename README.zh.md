@@ -89,7 +89,7 @@ python scripts/ask.py --query "你的问题" --search-k 20 --top-k 5
 - `RAG_IMAGE_DIR`（默认：`data/index/chunk_images`）
 - `RAG_BM25_DIR`（默认：`data/index/bm25`）
 
-Milvus Lite 只支持部分索引类型，本地 `data/milvus.db` 默认使用 `FLAT`。
+Milvus Lite 只支持部分索引类型，本地 `data/index/milvus.db` 默认使用 `FLAT`。
 如需在 Milvus 服务端使用 HNSW，可设置：
 ```bash
 export RAG_INDEX_TYPE=HNSW
@@ -161,8 +161,34 @@ python scripts/ask.py --query "..." [--no-rerank]
 
 启用 BM25 后可选择融合方式：`weighted`（归一化加权）、`rrf`（排名融合）。`dense` 会忽略 BM25。
 
+## API 服务（FastAPI）
+启动给前端使用的轻量 API：
+
+```bash
+conda run -n llm python scripts/api.py
+# 或: conda run -n llm uvicorn scripts.api:app --reload
+```
+
+接口：
+- `POST /ingest`（multipart form-data）：上传文件 + 集合配置
+- `POST /query`（JSON）：问题 + 集合配置
+
+## 轻量前端（React + TypeScript）
+轻量 UI 位于 `frontend/`，提供问答界面与文件上传。
+默认使用 mock 模式。
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+可选环境变量：
+- `VITE_API_BASE_URL`（默认：`http://localhost:8000`）
+- `VITE_USE_MOCK`（默认：`true`，设为 `false` 时调用 API）
+
 ## Milvus 运行模式
-- 默认使用 Milvus Lite（`MILVUS_URI=data/milvus.db`）。
+- 默认使用 Milvus Lite（`MILVUS_URI=data/index/milvus.db`）。
 - 如使用 Milvus 服务端，请设置 `MILVUS_URI=http://localhost:19530` 并自行启动服务。
 
 ## 项目结构（逐文件）

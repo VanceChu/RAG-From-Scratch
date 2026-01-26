@@ -5,6 +5,11 @@ __pycache__/
 .venv/
 .env
 .DS_Store
+.vite/
+node_modules/
+frontend/dist/
+frontend/node_modules/
+*.tsbuildinfo
 .milvus/
 *.db
 *.sqlite
