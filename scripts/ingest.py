@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import shlex
 import sys
 from pathlib import Path
 
@@ -18,6 +19,7 @@ from rag_core.config import (
     DEFAULT_CHUNK_OVERLAP,
     DEFAULT_CHUNK_SIZE,
     DEFAULT_COLLECTION,
+    DEFAULT_COLLECTION_RAW,
     DEFAULT_IMAGE_DIR,
     DEFAULT_EMBEDDING_API_KEY,
     DEFAULT_EMBEDDING_BASE_URL,
@@ -31,8 +33,11 @@ from rag_core.config import (
     DEFAULT_INDEX_M,
     DEFAULT_INDEX_NLIST,
     DEFAULT_INDEX_TYPE,
+    DEFAULT_ENABLE_BM25,
+    DEFAULT_ENABLE_SPARSE,
     DEFAULT_BM25_DIR,
     DEFAULT_MILVUS_URI,
+    DEFAULT_RESET,
     DEFAULT_STATE_DIR,
     resolve_collection_name,
 )
@@ -160,12 +165,169 @@ def _print_ingest_timing(timing: dict) -> None:
     print()
 
 
+def _prompt_text(label: str, default: str | None = None, required: bool = False) -> str:
+    while True:
+        suffix = f" [{default}]" if default not in (None, "") else ""
+        value = input(f"{label}{suffix}: ").strip()
+        if value:
+            return value
+        if default not in (None, ""):
+            return str(default)
+        if not required:
+            return ""
+        print("A value is required.")
+
+
+def _prompt_bool(label: str, default: bool) -> bool:
+    hint = "Y/n" if default else "y/N"
+    while True:
+        value = input(f"{label} ({hint}): ").strip().lower()
+        if not value:
+            return default
+        if value in {"y", "yes"}:
+            return True
+        if value in {"n", "no"}:
+            return False
+        print("Please enter y or n.")
+
+
+def _prompt_int(label: str, default: int) -> int:
+    while True:
+        value = input(f"{label} [{default}]: ").strip()
+        if not value:
+            return default
+        try:
+            return int(value)
+        except ValueError:
+            print("Please enter a valid integer.")
+
+
+def _prompt_choice(label: str, choices: list[str], default: str | None) -> str:
+    normalized = {choice.lower(): choice for choice in choices}
+    default_value = (default or "").strip()
+    if default_value:
+        default_key = default_value.lower()
+        if default_key == "auto":
+            default_key = "autoindex"
+        default_value = normalized.get(default_key, default_value)
+    choices_label = "/".join(choices)
+    while True:
+        suffix = f" [{default_value}]" if default_value else ""
+        value = input(f"{label} ({choices_label}){suffix}: ").strip()
+        if not value and default_value:
+            return default_value
+        if not value:
+            print("Please choose a value.")
+            continue
+        key = value.lower()
+        if key == "auto":
+            key = "autoindex"
+        choice = normalized.get(key)
+        if choice:
+            return choice
+        print(f"Please choose from: {choices_label}")
+
+
+def _prompt_paths(label: str, default_paths: list[str] | None) -> list[Path]:
+    default_value = " ".join(str(path) for path in default_paths) if default_paths else ""
+    while True:
+        prompt = f"{label} [{default_value}]: " if default_value else f"{label}: "
+        raw = input(prompt).strip()
+        if not raw:
+            if default_paths:
+                return [Path(path).expanduser() for path in default_paths]
+            print("Please provide at least one path.")
+            continue
+        raw = raw.replace(",", " ")
+        try:
+            parts = shlex.split(raw)
+        except ValueError as exc:
+            print(f"Invalid path list: {exc}")
+            continue
+        if not parts:
+            print("Please provide at least one path.")
+            continue
+        return [Path(path).expanduser() for path in parts]
+
+
+def _run_wizard(args: argparse.Namespace) -> argparse.Namespace:
+    print("Ingest wizard (press Enter to accept defaults).")
+    args.paths = [str(path) for path in _prompt_paths("Paths to ingest", args.paths)]
+    args.reset = _prompt_bool("Reset collection before ingest", args.reset)
+    args.enable_bm25 = _prompt_bool("Enable BM25 index", args.enable_bm25)
+    args.enable_sparse = _prompt_bool("Enable sparse embeddings", args.enable_sparse)
+    if args.enable_bm25 and args.enable_sparse:
+        print("Note: BM25 takes precedence over sparse embeddings during retrieval.")
+
+    args.collection = _prompt_text("Collection name", args.collection)
+    args.collection_raw = _prompt_bool(
+        "Use collection name as-is (no suffix)",
+        args.collection_raw,
+    )
+    args.milvus_uri = _prompt_text("Milvus URI", args.milvus_uri)
+
+    provider_choices = [
+        "volcengine",
+        "openai",
+        "openai-compatible",
+        "openai-embeddings",
+        "sentence-transformers",
+        "ark",
+    ]
+    args.embedding_provider = _prompt_choice(
+        "Embedding provider",
+        provider_choices,
+        args.embedding_provider,
+    )
+    args.embedding_model = _prompt_text("Embedding model", args.embedding_model)
+    if args.embedding_provider in {
+        "openai",
+        "openai-compatible",
+        "openai-embeddings",
+        "volcengine",
+        "ark",
+    }:
+        args.embedding_base_url = _prompt_text(
+            "Embedding base URL (blank for default)",
+            args.embedding_base_url,
+        )
+        args.embedding_endpoint = _prompt_text(
+            "Embedding endpoint (blank for default)",
+            args.embedding_endpoint,
+        )
+        args.embedding_dim = _prompt_int("Embedding dimension (0=auto)", args.embedding_dim)
+
+    if _prompt_bool("Configure advanced settings", False):
+        args.chunk_size = _prompt_int("Chunk size (tokens)", args.chunk_size)
+        args.overlap = _prompt_int("Chunk overlap (tokens)", args.overlap)
+        args.batch_size = _prompt_int("Embedding batch size", args.batch_size)
+        args.index_type = _prompt_choice(
+            "Index type",
+            ["HNSW", "IVF_FLAT", "FLAT", "AUTOINDEX"],
+            args.index_type,
+        )
+        if args.index_type == "IVF_FLAT":
+            args.index_nlist = _prompt_int("IVF nlist", args.index_nlist)
+        elif args.index_type == "HNSW":
+            args.index_m = _prompt_int("HNSW M", args.index_m)
+            args.index_ef_construction = _prompt_int(
+                "HNSW efConstruction",
+                args.index_ef_construction,
+            )
+    print()
+    return args
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Ingest documents into Milvus.")
     parser.add_argument(
+        "--wizard",
+        action="store_true",
+        help="Run an interactive setup wizard.",
+    )
+    parser.add_argument(
         "--paths",
         nargs="+",
-        required=True,
         help="Files or directories to ingest.",
     )
     parser.add_argument(
@@ -181,6 +343,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--collection-raw",
         action="store_true",
+        default=DEFAULT_COLLECTION_RAW,
         help="Use the collection name as-is (disable model-based suffix).",
     )
     parser.add_argument(
@@ -253,23 +416,31 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--enable-sparse",
         action="store_true",
+        default=DEFAULT_ENABLE_SPARSE,
         help="Enable sparse vector generation using API.",
     )
     parser.add_argument(
         "--enable-bm25",
         action="store_true",
+        default=DEFAULT_ENABLE_BM25,
         help="Enable BM25 lexical index for hybrid retrieval.",
     )
     parser.add_argument(
         "--reset",
         action="store_true",
+        default=DEFAULT_RESET,
         help="Drop collection before ingesting.",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if not args.wizard and not args.paths:
+        parser.error("--paths is required unless --wizard is used.")
+    return args
 
 
 def main() -> None:
     args = parse_args()
+    if args.wizard:
+        args = _run_wizard(args)
     paths = [Path(path).expanduser() for path in args.paths]
     documents = _collect_documents(paths)
     collection_name = resolve_collection_name(

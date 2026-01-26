@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections import defaultdict
 
 from rag_core.embeddings import EmbeddingModel
 from rag_core.bm25_index import BM25Index
@@ -81,6 +82,47 @@ def _merge_dense_bm25(
     return merged[:limit]
 
 
+def _merge_rrf(
+    dense_results: list[SearchResult],
+    bm25_results: list[SearchResult],
+    limit: int,
+    k: int = 60,
+) -> list[SearchResult]:
+    if not bm25_results:
+        return dense_results[:limit]
+    if not dense_results:
+        return bm25_results[:limit]
+
+    k = max(1, int(k))
+    scores: dict[int, float] = defaultdict(float)
+    results_by_id: dict[int, SearchResult] = {}
+
+    def add_results(results: list[SearchResult]) -> None:
+        for rank, result in enumerate(results, start=1):
+            if result.id is None:
+                continue
+            scores[result.id] += 1.0 / (k + rank)
+            if result.id not in results_by_id:
+                results_by_id[result.id] = result
+
+    add_results(dense_results)
+    add_results(bm25_results)
+
+    merged: list[SearchResult] = []
+    for chunk_id, score in scores.items():
+        result = results_by_id[chunk_id]
+        merged.append(
+            SearchResult(
+                text=result.text,
+                metadata=result.metadata,
+                score=score,
+                id=chunk_id,
+            )
+        )
+    merged.sort(key=lambda item: item.score, reverse=True)
+    return merged[:limit]
+
+
 def retrieve(
     query: str,
     embedding_model: EmbeddingModel,
@@ -90,6 +132,8 @@ def retrieve(
     sparse_embedding_model: SparseEmbeddingModel | None = None,
     bm25_index: BM25Index | None = None,
     hybrid_alpha: float = 0.5,
+    fusion: str = "weighted",
+    rrf_k: int = 60,
     timing: dict | None = None,
 ) -> list[SearchResult]:
     if not query.strip():
@@ -126,7 +170,11 @@ def retrieve(
         timing["dense_search_s"] = dense_elapsed
         timing["dense_results"] = len(dense_results)
 
-    if bm25_index:
+    fusion_mode = (fusion or "weighted").strip().lower()
+    if fusion_mode not in {"weighted", "rrf", "dense"}:
+        raise ValueError(f"Unsupported fusion mode: {fusion}")
+
+    if bm25_index and fusion_mode != "dense":
         bm25_start = time.perf_counter()
         bm25_results = bm25_index.search(query, limit=limit)
         bm25_elapsed = time.perf_counter() - bm25_start
@@ -134,13 +182,21 @@ def retrieve(
             timing["bm25_search_s"] = bm25_elapsed
             timing["bm25_results"] = len(bm25_results)
         merge_start = time.perf_counter()
-        merged = _merge_dense_bm25(
-            dense_results=dense_results,
-            bm25_results=bm25_results,
-            dense_weight=hybrid_alpha,
-            metric_type=vector_store.metric_type,
-            limit=limit,
-        )
+        if fusion_mode == "rrf":
+            merged = _merge_rrf(
+                dense_results=dense_results,
+                bm25_results=bm25_results,
+                limit=limit,
+                k=rrf_k,
+            )
+        else:
+            merged = _merge_dense_bm25(
+                dense_results=dense_results,
+                bm25_results=bm25_results,
+                dense_weight=hybrid_alpha,
+                metric_type=vector_store.metric_type,
+                limit=limit,
+            )
         merge_elapsed = time.perf_counter() - merge_start
         if timing is not None:
             timing["merge_s"] = merge_elapsed

@@ -16,6 +16,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from rag_core.answer import answer_question
 from rag_core.config import (
     DEFAULT_COLLECTION,
+    DEFAULT_COLLECTION_RAW,
     DEFAULT_EMBEDDING_API_KEY,
     DEFAULT_EMBEDDING_BASE_URL,
     DEFAULT_EMBEDDING_DIM,
@@ -24,17 +25,26 @@ from rag_core.config import (
     DEFAULT_EMBEDDING_PROVIDER,
     DEFAULT_VOLC_API_BASE_URL,
     DEFAULT_VOLC_API_KEY,
+    DEFAULT_ENABLE_BM25,
+    DEFAULT_ENABLE_SPARSE,
     DEFAULT_INDEX_EF_CONSTRUCTION,
     DEFAULT_INDEX_M,
     DEFAULT_INDEX_NLIST,
     DEFAULT_INDEX_TYPE,
     DEFAULT_BM25_DIR,
+    DEFAULT_HYBRID_ALPHA,
+    DEFAULT_HISTORY_TURNS,
+    DEFAULT_INTERACTIVE,
     DEFAULT_MILVUS_URI,
     DEFAULT_OPENAI_MODEL,
+    DEFAULT_RERANK_ENABLED,
     DEFAULT_RERANK_MODEL,
     DEFAULT_RERANK_TOP_K,
+    DEFAULT_RRF_K,
     DEFAULT_SEARCH_K,
+    DEFAULT_STREAM,
     DEFAULT_TOP_K,
+    DEFAULT_FUSION,
     resolve_collection_name,
 )
 from rag_core.embeddings import EmbeddingModel
@@ -76,6 +86,8 @@ def _print_ask_overview(
     rerank: bool,
     rerank_model: str,
     rerank_top_k: int,
+    fusion: str,
+    rrf_k: int,
     stream: bool,
     interactive: bool,
     hybrid_alpha: float,
@@ -100,9 +112,13 @@ def _print_ask_overview(
     if rerank:
         print(f"- rerank_model: {rerank_model}")
         print(f"- rerank_top_k: {rerank_top_k}")
+    print(f"- fusion: {fusion}")
+    if fusion == "rrf":
+        print(f"- rrf_k: {rrf_k}")
     print(f"- stream: {stream}")
     print(f"- interactive: {interactive}")
-    print(f"- hybrid_alpha: {hybrid_alpha}")
+    if fusion == "weighted" or (enable_sparse and not enable_bm25):
+        print(f"- hybrid_alpha: {hybrid_alpha}")
     print(f"- enable_sparse: {enable_sparse}")
     print(f"- enable_bm25: {enable_bm25}")
 
@@ -135,9 +151,191 @@ def _print_ask_timing(timing: dict) -> None:
     print(f"total_s: {timing.get('total_s', 0.0):.3f}")
 
 
+def _prompt_text(label: str, default: str | None = None, required: bool = False) -> str:
+    while True:
+        suffix = f" [{default}]" if default not in (None, "") else ""
+        value = input(f"{label}{suffix}: ").strip()
+        if value:
+            return value
+        if default not in (None, ""):
+            return str(default)
+        if not required:
+            return ""
+        print("A value is required.")
+
+
+def _prompt_bool(label: str, default: bool) -> bool:
+    hint = "Y/n" if default else "y/N"
+    while True:
+        value = input(f"{label} ({hint}): ").strip().lower()
+        if not value:
+            return default
+        if value in {"y", "yes"}:
+            return True
+        if value in {"n", "no"}:
+            return False
+        print("Please enter y or n.")
+
+
+def _prompt_int(label: str, default: int) -> int:
+    while True:
+        value = input(f"{label} [{default}]: ").strip()
+        if not value:
+            return default
+        try:
+            return int(value)
+        except ValueError:
+            print("Please enter a valid integer.")
+
+
+def _prompt_float(label: str, default: float) -> float:
+    while True:
+        value = input(f"{label} [{default}]: ").strip()
+        if not value:
+            return default
+        try:
+            return float(value)
+        except ValueError:
+            print("Please enter a valid number.")
+
+
+def _prompt_choice(label: str, choices: list[str], default: str | None) -> str:
+    normalized = {choice.lower(): choice for choice in choices}
+    default_value = (default or "").strip()
+    if default_value:
+        default_key = default_value.lower()
+        if default_key == "auto":
+            default_key = "autoindex"
+        default_value = normalized.get(default_key, default_value)
+    choices_label = "/".join(choices)
+    while True:
+        suffix = f" [{default_value}]" if default_value else ""
+        value = input(f"{label} ({choices_label}){suffix}: ").strip()
+        if not value and default_value:
+            return default_value
+        if not value:
+            print("Please choose a value.")
+            continue
+        key = value.lower()
+        if key == "auto":
+            key = "autoindex"
+        choice = normalized.get(key)
+        if choice:
+            return choice
+        print(f"Please choose from: {choices_label}")
+
+
+def _run_wizard(args: argparse.Namespace) -> argparse.Namespace:
+    print("Ask wizard (press Enter to accept defaults).")
+    query_default = args.query or ""
+    query = _prompt_text("Question (blank for interactive mode)", query_default)
+    if query:
+        args.query = query
+    else:
+        args.query = None
+        args.interactive = True
+
+    args.rerank = _prompt_bool("Enable rerank", args.rerank)
+
+    args.enable_bm25 = _prompt_bool("Enable BM25 retrieval", args.enable_bm25)
+    if args.enable_bm25:
+        args.fusion = _prompt_choice(
+            "Fusion strategy",
+            ["weighted", "rrf", "dense"],
+            args.fusion,
+        )
+        if args.fusion == "rrf":
+            args.rrf_k = _prompt_int("RRF k", args.rrf_k)
+        elif args.fusion == "weighted":
+            args.hybrid_alpha = _prompt_float(
+                "Hybrid alpha (dense weight)",
+                args.hybrid_alpha,
+            )
+    else:
+        args.enable_sparse = _prompt_bool(
+            "Enable sparse embeddings",
+            args.enable_sparse,
+        )
+        if args.enable_sparse:
+            args.hybrid_alpha = _prompt_float(
+                "Hybrid alpha (dense weight)",
+                args.hybrid_alpha,
+            )
+
+    if _prompt_bool("Configure advanced settings", False):
+        args.search_k = _prompt_int("Search k", args.search_k)
+        args.top_k = _prompt_int("Top k", args.top_k)
+        if args.rerank:
+            args.rerank_top_k = _prompt_int("Rerank top k", args.rerank_top_k)
+        args.history_turns = _prompt_int("History turns", args.history_turns)
+        args.stream = _prompt_bool("Stream answer tokens", args.stream)
+        args.openai_model = _prompt_text("Chat model", args.openai_model)
+        args.collection = _prompt_text("Collection name", args.collection)
+        args.collection_raw = _prompt_bool(
+            "Use collection name as-is (no suffix)",
+            args.collection_raw,
+        )
+        args.milvus_uri = _prompt_text("Milvus URI", args.milvus_uri)
+
+        provider_choices = [
+            "volcengine",
+            "openai",
+            "openai-compatible",
+            "openai-embeddings",
+            "sentence-transformers",
+            "ark",
+        ]
+        args.embedding_provider = _prompt_choice(
+            "Embedding provider",
+            provider_choices,
+            args.embedding_provider,
+        )
+        args.embedding_model = _prompt_text("Embedding model", args.embedding_model)
+        if args.embedding_provider in {
+            "openai",
+            "openai-compatible",
+            "openai-embeddings",
+            "volcengine",
+            "ark",
+        }:
+            args.embedding_base_url = _prompt_text(
+                "Embedding base URL (blank for default)",
+                args.embedding_base_url,
+            )
+            args.embedding_endpoint = _prompt_text(
+                "Embedding endpoint (blank for default)",
+                args.embedding_endpoint,
+            )
+            args.embedding_dim = _prompt_int(
+                "Embedding dimension (0=auto)",
+                args.embedding_dim,
+            )
+
+        args.index_type = _prompt_choice(
+            "Index type",
+            ["HNSW", "IVF_FLAT", "FLAT", "AUTOINDEX"],
+            args.index_type,
+        )
+        if args.index_type == "IVF_FLAT":
+            args.index_nlist = _prompt_int("IVF nlist", args.index_nlist)
+        elif args.index_type == "HNSW":
+            args.index_m = _prompt_int("HNSW M", args.index_m)
+            args.index_ef_construction = _prompt_int(
+                "HNSW efConstruction",
+                args.index_ef_construction,
+            )
+    print()
+    return args
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Ask questions over your documents.")
     parser.add_argument("--query", help="Question to ask.")
+    parser.add_argument(
+        "--wizard",
+        action="store_true",
+        help="Run an interactive setup wizard.",
+    )
     parser.add_argument(
         "--milvus-uri",
         default=DEFAULT_MILVUS_URI,
@@ -151,6 +349,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--collection-raw",
         action="store_true",
+        default=DEFAULT_COLLECTION_RAW,
         help="Use the collection name as-is (disable model-based suffix).",
     )
     parser.add_argument(
@@ -221,8 +420,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--rerank",
-        action="store_true",
-        help="Enable cross-encoder reranking.",
+        action=argparse.BooleanOptionalAction,
+        default=DEFAULT_RERANK_ENABLED,
+        help="Enable cross-encoder reranking (default: True).",
     )
     parser.add_argument(
         "--rerank-model",
@@ -238,35 +438,50 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--interactive",
         action="store_true",
+        default=DEFAULT_INTERACTIVE,
         help="Start an interactive conversation loop.",
     )
     parser.add_argument(
         "--history-turns",
         type=int,
-        default=3,
+        default=DEFAULT_HISTORY_TURNS,
         help="Number of recent turns to include in the prompt.",
     )
     parser.add_argument(
         "--stream",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=DEFAULT_STREAM,
         help="Stream answer tokens as they are generated (default: True).",
     )
     parser.add_argument(
         "--enable-sparse",
         action="store_true",
+        default=DEFAULT_ENABLE_SPARSE,
         help="Enable sparse vector generation using API.",
     )
     parser.add_argument(
         "--enable-bm25",
         action="store_true",
+        default=DEFAULT_ENABLE_BM25,
         help="Enable BM25 lexical index for hybrid retrieval.",
+    )
+    parser.add_argument(
+        "--fusion",
+        choices=("weighted", "rrf", "dense"),
+        default=DEFAULT_FUSION,
+        help="Fusion strategy when BM25 is enabled: weighted, rrf, or dense.",
+    )
+    parser.add_argument(
+        "--rrf-k",
+        type=int,
+        default=DEFAULT_RRF_K,
+        help="RRF k parameter (used only when --fusion rrf).",
     )
     parser.add_argument(
         "--hybrid-alpha",
         type=float,
-        default=0.5,
-        help="Weight for dense search in hybrid search (0.0=lexical, 1.0=dense).",
+        default=DEFAULT_HYBRID_ALPHA,
+        help="Dense weight for hybrid search (0.0=BM25/sparse, 1.0=dense).",
     )
     return parser.parse_args()
 
@@ -305,6 +520,8 @@ def _answer_once(
     sparse_embedding_model: object | None = None,
     bm25_index: object | None = None,
     hybrid_alpha: float = 0.5,
+    fusion: str = "weighted",
+    rrf_k: int = 60,
 ) -> tuple[str | None, list[SearchResult], dict]:
     timing: dict = {}
     retrieve_timing: dict = {}
@@ -318,6 +535,8 @@ def _answer_once(
         sparse_embedding_model=sparse_embedding_model,
         bm25_index=bm25_index,
         hybrid_alpha=hybrid_alpha,
+        fusion=fusion,
+        rrf_k=rrf_k,
         timing=retrieve_timing,
     )
     timing["retrieve"] = retrieve_timing
@@ -352,6 +571,8 @@ def _answer_once(
 
 def main() -> None:
     args = parse_args()
+    if args.wizard:
+        args = _run_wizard(args)
     collection_name = resolve_collection_name(
         base_collection=args.collection,
         embedding_provider=args.embedding_provider,
@@ -421,6 +642,8 @@ def main() -> None:
         rerank=args.rerank,
         rerank_model=args.rerank_model,
         rerank_top_k=args.rerank_top_k,
+        fusion=args.fusion,
+        rrf_k=args.rrf_k,
         stream=args.stream,
         interactive=args.interactive or not args.query,
         hybrid_alpha=args.hybrid_alpha,
@@ -465,6 +688,8 @@ def main() -> None:
             sparse_embedding_model=sparse_model,
             bm25_index=bm25_index,
             hybrid_alpha=args.hybrid_alpha,
+            fusion=args.fusion,
+            rrf_k=args.rrf_k,
         )
         if not results or answer is None:
             print("No relevant context found.")

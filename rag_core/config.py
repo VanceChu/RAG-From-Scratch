@@ -37,6 +37,28 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_float(name: str, default: float) -> float:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except ValueError:
+        return default
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "y", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "n", "off"}:
+        return False
+    return default
+
+
 def _env_str(name: str, default: str) -> str:
     value = os.getenv(name)
     return value if value else default
@@ -83,26 +105,30 @@ def resolve_collection_name(
 
 DEFAULT_COLLECTION = _env_str("RAG_COLLECTION", "rag_chunks")
 DEFAULT_MILVUS_URI = _env_str("MILVUS_URI", "data/index/milvus.db")
-DEFAULT_INDEX_TYPE = _env_str("RAG_INDEX_TYPE", "HNSW")
+DEFAULT_INDEX_TYPE = _env_str("RAG_INDEX_TYPE", "FLAT")
 DEFAULT_INDEX_NLIST = _env_int("RAG_INDEX_NLIST", 128)
 DEFAULT_INDEX_M = _env_int("RAG_INDEX_M", 8)
 DEFAULT_INDEX_EF_CONSTRUCTION = _env_int("RAG_INDEX_EF_CONSTRUCTION", 64)
 DEFAULT_EMBEDDING_PROVIDER = _env_str("RAG_EMBEDDING_PROVIDER", "volcengine")
 DEFAULT_EMBEDDING_MODEL = _env_str(
-    "RAG_EMBEDDING_MODEL", "doubao-embedding-large-text-250515"
+    "RAG_EMBEDDING_MODEL", "ep-20260126203123-rhjcv"
 )
 DEFAULT_EMBEDDING_API_KEY = _env_str("RAG_EMBEDDING_API_KEY", "")
 DEFAULT_EMBEDDING_BASE_URL = _env_str("RAG_EMBEDDING_BASE_URL", "")
-DEFAULT_EMBEDDING_ENDPOINT = _env_str("RAG_EMBEDDING_ENDPOINT", "")
+DEFAULT_EMBEDDING_ENDPOINT = _env_str("RAG_EMBEDDING_ENDPOINT", "embeddings/multimodal")
 DEFAULT_VOLC_API_KEY = _env_str("VOLC_API_KEY", "")
 DEFAULT_VOLC_API_BASE_URL = _env_str(
     "VOLC_API_BASE_URL", "https://ark.cn-beijing.volces.com/api/v3"
 )
-DEFAULT_EMBEDDING_DIM = _env_int("RAG_EMBEDDING_DIM", 0)
+DEFAULT_EMBEDDING_DIM = _env_int("RAG_EMBEDDING_DIM", 2048)
 DEFAULT_RERANK_MODEL = _env_str(
     "RAG_RERANK_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2"
 )
 DEFAULT_OPENAI_MODEL = _env_str("RAG_OPENAI_MODEL", "gpt-5.1")
+DEFAULT_RERANK_ENABLED = _env_bool("RAG_RERANK_ENABLED", True)
+DEFAULT_HISTORY_TURNS = _env_int("RAG_HISTORY_TURNS", 3)
+DEFAULT_STREAM = _env_bool("RAG_STREAM", True)
+DEFAULT_INTERACTIVE = _env_bool("RAG_INTERACTIVE", False)
 
 DEFAULT_SPARSE_PROVIDER = _env_str("RAG_SPARSE_PROVIDER", "api")
 DEFAULT_SPARSE_API_URL = _env_str("RAG_SPARSE_API_URL", "https://api.siliconflow.cn/v1/embeddings")
@@ -114,6 +140,13 @@ DEFAULT_TOP_K = _env_int("RAG_TOP_K", 5)
 DEFAULT_SEARCH_K = _env_int("RAG_SEARCH_K", 20)
 DEFAULT_RERANK_TOP_K = _env_int("RAG_RERANK_TOP_K", 5)
 DEFAULT_BATCH_SIZE = _env_int("RAG_BATCH_SIZE", 64)
+DEFAULT_ENABLE_BM25 = _env_bool("RAG_ENABLE_BM25", False)
+DEFAULT_ENABLE_SPARSE = _env_bool("RAG_ENABLE_SPARSE", False)
+DEFAULT_FUSION = _env_str("RAG_FUSION", "weighted")
+DEFAULT_RRF_K = _env_int("RAG_RRF_K", 60)
+DEFAULT_HYBRID_ALPHA = _env_float("RAG_HYBRID_ALPHA", 0.5)
+DEFAULT_COLLECTION_RAW = _env_bool("RAG_COLLECTION_RAW", False)
+DEFAULT_RESET = _env_bool("RAG_RESET", False)
 DEFAULT_IMAGE_DIR = _env_path("RAG_IMAGE_DIR", "data/index/chunk_images")
 DEFAULT_STATE_DIR = _env_path("RAG_STATE_DIR", "data/index/ingest_state")
 DEFAULT_BM25_DIR = _env_path("RAG_BM25_DIR", "data/index/bm25")
