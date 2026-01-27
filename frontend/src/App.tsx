@@ -1,4 +1,12 @@
 import { useMemo, useState } from "react";
+import { ingestFiles, queryRag } from "./api/rag";
+import {
+  DEFAULT_SETTINGS,
+  FUSION_OPTIONS,
+  INDEX_OPTIONS,
+  PROVIDER_OPTIONS,
+  type Settings,
+} from "./types/settings";
 
 type Message = {
   id: string;
@@ -13,39 +21,6 @@ type KnowledgeBase = {
   name: string;
   documents: number;
   updatedAt: string;
-};
-
-type Settings = {
-  collection: string;
-  collectionRaw: boolean;
-  milvusUri: string;
-  embeddingProvider: string;
-  embeddingModel: string;
-  embeddingBaseUrl: string;
-  embeddingEndpoint: string;
-  embeddingDim: number;
-  indexType: string;
-  indexNlist: number;
-  indexM: number;
-  indexEfConstruction: number;
-  searchK: number;
-  topK: number;
-  enableBm25: boolean;
-  enableSparse: boolean;
-  fusion: string;
-  hybridAlpha: number;
-  rrfK: number;
-  rerank: boolean;
-  rerankModel: string;
-  rerankTopK: number;
-  openaiModel: string;
-  historyTurns: number;
-  stream: boolean;
-  interactive: boolean;
-  chunkSize: number;
-  overlap: number;
-  batchSize: number;
-  reset: boolean;
 };
 
 type InfoTipProps = {
@@ -69,51 +44,6 @@ const INITIAL_KBS: KnowledgeBase[] = [
     updatedAt: "Yesterday"
   }
 ];
-
-const DEFAULT_SETTINGS: Settings = {
-  collection: "rag_chunks",
-  collectionRaw: false,
-  milvusUri: "data/index/milvus.db",
-  embeddingProvider: "volcengine",
-  embeddingModel: "ep-20260126203123-rhjcv",
-  embeddingBaseUrl: "",
-  embeddingEndpoint: "embeddings/multimodal",
-  embeddingDim: 2048,
-  indexType: "FLAT",
-  indexNlist: 128,
-  indexM: 8,
-  indexEfConstruction: 64,
-  searchK: 20,
-  topK: 5,
-  enableBm25: false,
-  enableSparse: false,
-  fusion: "weighted",
-  hybridAlpha: 0.5,
-  rrfK: 60,
-  rerank: true,
-  rerankModel: "cross-encoder/ms-marco-MiniLM-L-6-v2",
-  rerankTopK: 5,
-  openaiModel: "gpt-5.1",
-  historyTurns: 3,
-  stream: false,
-  interactive: false,
-  chunkSize: 800,
-  overlap: 120,
-  batchSize: 64,
-  reset: false
-};
-
-const PROVIDER_OPTIONS = [
-  "volcengine",
-  "openai",
-  "openai-compatible",
-  "openai-embeddings",
-  "sentence-transformers",
-  "ark"
-];
-
-const INDEX_OPTIONS = ["FLAT", "IVF_FLAT", "HNSW", "AUTOINDEX"];
-const FUSION_OPTIONS = ["weighted", "rrf", "dense"];
 
 const INITIAL_MESSAGES: Message[] = [
   {
@@ -199,7 +129,7 @@ export default function App() {
     try {
       const response = useMock
         ? await mockAnswer(trimmed)
-        : await fetchAnswer(trimmed, settings, apiBaseUrl);
+        : await queryRag(trimmed, settings, apiBaseUrl);
 
       const assistantMessage: Message = {
         id: `m-${Date.now()}-a`,
@@ -232,15 +162,7 @@ export default function App() {
       if (useMock) {
         await new Promise((resolve) => setTimeout(resolve, 1200));
       } else {
-        const form = buildIngestFormData(files, settings, selectedKb.id);
-        const res = await fetch(`${apiBaseUrl}/ingest`, {
-          method: "POST",
-          body: form
-        });
-
-        if (!res.ok) {
-          throw new Error("Upload failed");
-        }
+        await ingestFiles(files, settings, selectedKb.id, apiBaseUrl);
       }
       setUploadStatus(`Uploaded ${files.length} file(s) successfully.`);
     } catch (error) {
@@ -858,95 +780,6 @@ export default function App() {
       </main>
     </div>
   );
-}
-
-async function fetchAnswer(query: string, settings: Settings, apiBaseUrl: string) {
-  const payload: Record<string, unknown> = {
-    query,
-    collection: settings.collection,
-    collection_raw: settings.collectionRaw,
-    milvus_uri: settings.milvusUri,
-    embedding_provider: settings.embeddingProvider,
-    embedding_model: settings.embeddingModel,
-    embedding_dim: settings.embeddingDim,
-    index_type: settings.indexType,
-    index_nlist: settings.indexNlist,
-    index_m: settings.indexM,
-    index_ef_construction: settings.indexEfConstruction,
-    search_k: settings.searchK,
-    top_k: settings.topK,
-    rerank: settings.rerank,
-    rerank_model: settings.rerankModel,
-    rerank_top_k: settings.rerankTopK,
-    enable_sparse: settings.enableSparse,
-    enable_bm25: settings.enableBm25,
-    fusion: settings.fusion,
-    rrf_k: settings.rrfK,
-    hybrid_alpha: settings.hybridAlpha,
-    stream: settings.stream,
-    interactive: settings.interactive,
-    openai_model: settings.openaiModel,
-    history_turns: settings.historyTurns
-  };
-
-  if (settings.embeddingBaseUrl.trim()) {
-    payload.embedding_base_url = settings.embeddingBaseUrl.trim();
-  }
-  if (settings.embeddingEndpoint.trim()) {
-    payload.embedding_endpoint = settings.embeddingEndpoint.trim();
-  }
-
-  const response = await fetch(`${apiBaseUrl}/query`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify(payload)
-  });
-
-  if (!response.ok) {
-    throw new Error("Query failed");
-  }
-
-  const data = (await response.json()) as {
-    answer?: string;
-    citations?: string[];
-  };
-
-  return {
-    answer: data.answer || "No answer returned.",
-    citations: data.citations || []
-  };
-}
-
-function buildIngestFormData(files: FileList, settings: Settings, fallbackCollection: string) {
-  const form = new FormData();
-  Array.from(files).forEach((file) => form.append("files", file));
-
-  form.append("collection", settings.collection || fallbackCollection);
-  form.append("collection_raw", settings.collectionRaw ? "true" : "false");
-  form.append("milvus_uri", settings.milvusUri);
-  form.append("embedding_provider", settings.embeddingProvider);
-  form.append("embedding_model", settings.embeddingModel);
-  if (settings.embeddingBaseUrl.trim()) {
-    form.append("embedding_base_url", settings.embeddingBaseUrl.trim());
-  }
-  if (settings.embeddingEndpoint.trim()) {
-    form.append("embedding_endpoint", settings.embeddingEndpoint.trim());
-  }
-  form.append("embedding_dim", String(settings.embeddingDim));
-  form.append("index_type", settings.indexType);
-  form.append("index_nlist", String(settings.indexNlist));
-  form.append("index_m", String(settings.indexM));
-  form.append("index_ef_construction", String(settings.indexEfConstruction));
-  form.append("chunk_size", String(settings.chunkSize));
-  form.append("overlap", String(settings.overlap));
-  form.append("batch_size", String(settings.batchSize));
-  form.append("enable_sparse", settings.enableSparse ? "true" : "false");
-  form.append("enable_bm25", settings.enableBm25 ? "true" : "false");
-  form.append("reset", settings.reset ? "true" : "false");
-
-  return form;
 }
 
 async function mockAnswer(query: string) {
