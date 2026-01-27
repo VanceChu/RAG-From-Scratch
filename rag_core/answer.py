@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Callable, Sequence
 
 from rag_core.llm import OpenAIChatLLM
+from rag_core.query_rewriter import ConversationTurn
 from rag_core.vector_store import SearchResult
 
 
@@ -29,23 +30,23 @@ def build_context(results: list[SearchResult]) -> str:
 
 
 def _history_block(
-    conversation_history: Sequence[tuple[str, str]] | None,
+    conversation_history: Sequence[ConversationTurn] | None,
     max_turns: int = 3,
 ) -> str:
     if not conversation_history:
         return ""
     recent_turns = list(conversation_history[-max_turns:])
     lines = ["Conversation history (most recent last):"]
-    for index, (question, answer) in enumerate(recent_turns, start=1):
-        lines.append(f"Q{index}: {question}")
-        lines.append(f"A{index}: {answer}")
+    for index, turn in enumerate(recent_turns, start=1):
+        lines.append(f"Q{index}: {turn.query}")
+        lines.append(f"A{index}: {turn.response}")
     return "\n".join(lines)
 
 
 def _build_messages(
     query: str,
     results: list[SearchResult],
-    conversation_history: Sequence[tuple[str, str]] | None,
+    conversation_history: Sequence[ConversationTurn] | None,
     history_turns: int,
 ) -> list[dict]:
     context = build_context(results)
@@ -74,7 +75,7 @@ def answer_question(
     query: str,
     results: list[SearchResult],
     llm: OpenAIChatLLM,
-    conversation_history: Sequence[tuple[str, str]] | None = None,
+    conversation_history: Sequence[ConversationTurn] | None = None,
     history_turns: int = 3,
     stream: bool = False,
     on_token: Callable[[str], None] | None = None,

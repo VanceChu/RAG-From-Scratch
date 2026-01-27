@@ -34,6 +34,7 @@ from rag_core.config import (
     DEFAULT_EMBEDDING_MODEL,
     DEFAULT_EMBEDDING_PROVIDER,
     DEFAULT_ENABLE_BM25,
+    DEFAULT_ENABLE_QUERY_REWRITE,
     DEFAULT_ENABLE_SPARSE,
     DEFAULT_FUSION,
     DEFAULT_HISTORY_TURNS,
@@ -48,6 +49,7 @@ from rag_core.config import (
     DEFAULT_RERANK_ENABLED,
     DEFAULT_RERANK_MODEL,
     DEFAULT_RERANK_TOP_K,
+    DEFAULT_REWRITE_STRATEGIES,
     DEFAULT_RRF_K,
     DEFAULT_SEARCH_K,
     DEFAULT_STATE_DIR,
@@ -61,12 +63,20 @@ from rag_core.embeddings import EmbeddingModel
 from rag_core.ingest import ingest_documents
 from rag_core.ingest_state import IngestState
 from rag_core.llm import OpenAIChatLLM
+from rag_core.query_rewriter import ConversationTurn, RewriteResult, RewriteStrategy
 from rag_core.rerank import Reranker
-from rag_core.retriever import retrieve
+from rag_core.retriever import retrieve, retrieve_with_rewrite
 from rag_core.sparse_embedding import APISparseEmbeddingModel
 from rag_core.vector_store import SearchResult, VectorStore
 
 UPLOAD_ROOT = PROJECT_ROOT / "data" / "uploads"
+
+
+class ConversationTurnModel(BaseModel):
+    """Pydantic model for conversation turn."""
+
+    query: str
+    response: str
 
 
 class QueryRequest(BaseModel):
@@ -97,6 +107,21 @@ class QueryRequest(BaseModel):
     stream: bool = DEFAULT_STREAM
     interactive: bool = DEFAULT_INTERACTIVE
     openai_model: str = DEFAULT_OPENAI_MODEL
+    enable_rewrite: bool = DEFAULT_ENABLE_QUERY_REWRITE
+    rewrite_strategies: list[str] = Field(
+        default_factory=lambda: DEFAULT_REWRITE_STRATEGIES.split(",")
+    )
+    conversation_history: list[ConversationTurnModel] | None = None
+
+
+class RewriteInfo(BaseModel):
+    """Information about query rewriting."""
+
+    original_query: str
+    rewritten_query: str
+    rewritten_queries: list[str] | None = None
+    strategy: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class QueryResponse(BaseModel):
@@ -104,6 +129,7 @@ class QueryResponse(BaseModel):
     citations: list[str]
     evidence: list[dict[str, Any]]
     timing: dict[str, Any]
+    rewrite_info: RewriteInfo | None = None
 
 
 def _ensure_local_milvus_parent(uri: str) -> None:
@@ -247,28 +273,75 @@ def query(request: QueryRequest) -> QueryResponse:
     if request.enable_bm25:
         bm25_index = BM25Index.load(collection=collection_name, base_dir=DEFAULT_BM25_DIR)
 
+    llm = OpenAIChatLLM(model=request.openai_model)
+
+    conversation_history: list[ConversationTurn] | None = None
+    if request.conversation_history:
+        conversation_history = [
+            ConversationTurn(query=turn.query, response=turn.response)
+            for turn in request.conversation_history
+        ]
+
     timing: dict[str, Any] = {}
     retrieve_timing: dict[str, Any] = {}
     total_start = time.perf_counter()
-    results = retrieve(
-        query=request.query,
-        embedding_model=embedding_model,
-        vector_store=vector_store,
-        top_k=request.top_k,
-        search_k=request.search_k,
-        sparse_embedding_model=sparse_model,
-        bm25_index=bm25_index,
-        hybrid_alpha=request.hybrid_alpha,
-        fusion=request.fusion,
-        rrf_k=request.rrf_k,
-        timing=retrieve_timing,
-    )
+
+    rewrite_info_response: RewriteInfo | None = None
+    rewrite_result: RewriteResult | None = None
+
+    if request.enable_rewrite:
+        results, rewrite_result = retrieve_with_rewrite(
+            query=request.query,
+            embedding_model=embedding_model,
+            vector_store=vector_store,
+            top_k=request.top_k,
+            llm=llm,
+            conversation_history=conversation_history,
+            enable_rewrite=True,
+            rewrite_strategies=request.rewrite_strategies,
+            search_k=request.search_k,
+            sparse_embedding_model=sparse_model,
+            bm25_index=bm25_index,
+            hybrid_alpha=request.hybrid_alpha,
+            fusion=request.fusion,
+            rrf_k=request.rrf_k,
+            timing=retrieve_timing,
+        )
+        if rewrite_result:
+            rewrite_info_response = RewriteInfo(
+                original_query=rewrite_result.original_query,
+                rewritten_query=rewrite_result.primary_query,
+                rewritten_queries=rewrite_result.rewritten_queries,
+                strategy=rewrite_result.strategy.value,
+                metadata=rewrite_result.metadata,
+            )
+    else:
+        results = retrieve(
+            query=request.query,
+            embedding_model=embedding_model,
+            vector_store=vector_store,
+            top_k=request.top_k,
+            search_k=request.search_k,
+            sparse_embedding_model=sparse_model,
+            bm25_index=bm25_index,
+            hybrid_alpha=request.hybrid_alpha,
+            fusion=request.fusion,
+            rrf_k=request.rrf_k,
+            timing=retrieve_timing,
+        )
+
     timing["retrieve"] = retrieve_timing
+
+    # Use the rewritten query for generation only when it is a safe
+    # contextual disambiguation of the user's intent.
+    generation_query = request.query
+    if rewrite_result and rewrite_result.strategy == RewriteStrategy.CONTEXTUAL:
+        generation_query = rewrite_result.primary_query
 
     if request.rerank and results:
         reranker = Reranker(request.rerank_model)
         rerank_start = time.perf_counter()
-        results = reranker.rerank(request.query, results, top_k=request.rerank_top_k)
+        results = reranker.rerank(generation_query, results, top_k=request.rerank_top_k)
         timing["rerank_s"] = time.perf_counter() - rerank_start
     else:
         results = results[: request.top_k]
@@ -276,15 +349,20 @@ def query(request: QueryRequest) -> QueryResponse:
 
     if not results:
         timing["total_s"] = time.perf_counter() - total_start
-        return QueryResponse(answer="No relevant context found.", citations=[], evidence=[], timing=timing)
+        return QueryResponse(
+            answer="No relevant context found.",
+            citations=[],
+            evidence=[],
+            timing=timing,
+            rewrite_info=rewrite_info_response,
+        )
 
-    llm = OpenAIChatLLM(model=request.openai_model)
     llm_start = time.perf_counter()
     answer = answer_question(
-        request.query,
+        generation_query,
         results,
         llm,
-        conversation_history=None,
+        conversation_history=conversation_history,
         history_turns=request.history_turns,
         stream=False,
     )
@@ -304,7 +382,13 @@ def query(request: QueryRequest) -> QueryResponse:
             }
         )
     citations = _build_citations(results)
-    return QueryResponse(answer=answer, citations=citations, evidence=evidence, timing=timing)
+    return QueryResponse(
+        answer=answer,
+        citations=citations,
+        evidence=evidence,
+        timing=timing,
+        rewrite_info=rewrite_info_response,
+    )
 
 
 @app.post("/ingest")

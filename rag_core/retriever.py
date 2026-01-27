@@ -1,13 +1,27 @@
-"""Query embedding + vector search."""
+"""Query embedding + vector search with query rewriting support."""
 
 from __future__ import annotations
 
 import logging
 import time
 from collections import defaultdict
+from typing import Sequence
 
-from rag_core.embeddings import EmbeddingModel
 from rag_core.bm25_index import BM25Index
+from rag_core.config import (
+    DEFAULT_ENABLE_HYDE,
+    DEFAULT_ENABLE_QUERY_DECOMPOSITION,
+    DEFAULT_ENABLE_QUERY_EXPANSION,
+    DEFAULT_ENABLE_STEP_BACK,
+)
+from rag_core.embeddings import EmbeddingModel
+from rag_core.llm import OpenAIChatLLM
+from rag_core.query_rewriter import (
+    ConversationTurn,
+    QueryRewriterPipeline,
+    RewriteResult,
+    RewriteStrategy,
+)
 from rag_core.sparse_embedding import SparseEmbeddingModel
 from rag_core.vector_store import SearchResult, VectorStore
 
@@ -207,3 +221,227 @@ def retrieve(
     if timing is not None:
         timing["total_s"] = time.perf_counter() - total_start
     return dense_results
+
+
+def retrieve_with_rewrite(
+    query: str,
+    embedding_model: EmbeddingModel,
+    vector_store: VectorStore,
+    top_k: int,
+    llm: OpenAIChatLLM | None = None,
+    conversation_history: Sequence[ConversationTurn] | None = None,
+    enable_rewrite: bool = True,
+    rewrite_strategies: list[str] | None = None,
+    search_k: int | None = None,
+    sparse_embedding_model: SparseEmbeddingModel | None = None,
+    bm25_index: BM25Index | None = None,
+    hybrid_alpha: float = 0.5,
+    fusion: str = "weighted",
+    rrf_k: int = 60,
+    timing: dict | None = None,
+) -> tuple[list[SearchResult], RewriteResult | None]:
+    """
+    Retrieve with optional query rewriting.
+
+    For single-query strategies (contextual, hyde), uses the rewritten query directly.
+    For multi-query strategies (expansion, decomposition, step_back), performs
+    multi-query retrieval with RRF fusion.
+
+    Args:
+        query: The user's query.
+        embedding_model: The embedding model.
+        vector_store: The vector store.
+        top_k: Number of results to return.
+        llm: LLM for query rewriting (required if enable_rewrite is True).
+        conversation_history: Previous conversation turns for context.
+        enable_rewrite: Whether to perform query rewriting.
+        rewrite_strategies: List of strategy names to enable.
+        search_k: Number of candidates to retrieve before filtering.
+        sparse_embedding_model: Optional sparse embedding model.
+        bm25_index: Optional BM25 index for hybrid retrieval.
+        hybrid_alpha: Weight for dense vs sparse/BM25 fusion.
+        fusion: Fusion strategy ("weighted", "rrf", or "dense").
+        rrf_k: RRF k parameter.
+        timing: Optional dict to store timing information.
+
+    Returns:
+        Tuple of (search results, rewrite result or None).
+    """
+    rewrite_result: RewriteResult | None = None
+
+    if enable_rewrite and llm:
+        rewrite_start = time.perf_counter()
+
+        strategies = None
+        if rewrite_strategies:
+            strategies = [
+                RewriteStrategy(s.strip())
+                for s in rewrite_strategies
+                if s.strip() in [e.value for e in RewriteStrategy]
+            ]
+
+        pipeline = QueryRewriterPipeline(
+            llm=llm,
+            strategies=strategies,
+            enable_contextual=not strategies,
+            enable_expansion=DEFAULT_ENABLE_QUERY_EXPANSION if not strategies else False,
+            enable_hyde=DEFAULT_ENABLE_HYDE if not strategies else False,
+            enable_decomposition=DEFAULT_ENABLE_QUERY_DECOMPOSITION if not strategies else False,
+            enable_step_back=DEFAULT_ENABLE_STEP_BACK if not strategies else False,
+        )
+
+        rewrite_result = pipeline.rewrite(query, conversation_history)
+
+        if timing is not None:
+            timing["rewrite_s"] = time.perf_counter() - rewrite_start
+            timing["rewrite_strategy"] = rewrite_result.strategy.value
+            timing["original_query"] = query
+            timing["rewritten_queries"] = rewrite_result.rewritten_queries
+
+        rewritten_queries = rewrite_result.rewritten_queries
+
+        if len(rewritten_queries) > 1:
+            logger.info(
+                f"Multi-query rewrite: '{query}' -> {len(rewritten_queries)} queries"
+            )
+            results = retrieve_multi_query(
+                queries=rewritten_queries,
+                embedding_model=embedding_model,
+                vector_store=vector_store,
+                top_k=top_k,
+                search_k=search_k,
+                sparse_embedding_model=sparse_embedding_model,
+                bm25_index=bm25_index,
+                hybrid_alpha=hybrid_alpha,
+                fusion=fusion,
+                rrf_k=rrf_k,
+                timing=timing,
+            )
+            return results, rewrite_result
+        else:
+            effective_query = rewrite_result.primary_query
+            logger.info(f"Query rewrite: '{query}' -> '{effective_query}'")
+            if timing is not None:
+                timing["rewritten_query"] = effective_query
+    else:
+        effective_query = query
+
+    results = retrieve(
+        query=effective_query,
+        embedding_model=embedding_model,
+        vector_store=vector_store,
+        top_k=top_k,
+        search_k=search_k,
+        sparse_embedding_model=sparse_embedding_model,
+        bm25_index=bm25_index,
+        hybrid_alpha=hybrid_alpha,
+        fusion=fusion,
+        rrf_k=rrf_k,
+        timing=timing,
+    )
+
+    return results, rewrite_result
+
+
+def retrieve_multi_query(
+    queries: list[str],
+    embedding_model: EmbeddingModel,
+    vector_store: VectorStore,
+    top_k: int,
+    search_k: int | None = None,
+    sparse_embedding_model: SparseEmbeddingModel | None = None,
+    bm25_index: BM25Index | None = None,
+    hybrid_alpha: float = 0.5,
+    fusion: str = "weighted",
+    rrf_k: int = 60,
+    timing: dict | None = None,
+) -> list[SearchResult]:
+    """
+    Retrieve using multiple query variants and merge results via RRF.
+
+    Used with query expansion or decomposition strategies.
+
+    Args:
+        queries: List of query variants.
+        embedding_model: The embedding model.
+        vector_store: The vector store.
+        top_k: Number of final results to return.
+        search_k: Number of candidates per query.
+        sparse_embedding_model: Optional sparse embedding model.
+        bm25_index: Optional BM25 index.
+        hybrid_alpha: Weight for dense vs sparse/BM25 fusion.
+        fusion: Fusion strategy ("weighted", "rrf", or "dense").
+        rrf_k: RRF k parameter for final multi-query fusion.
+        timing: Optional dict to store timing information.
+
+    Returns:
+        Merged and deduplicated search results.
+    """
+    if not queries:
+        return []
+
+    total_start = time.perf_counter()
+    all_results: list[list[SearchResult]] = []
+    per_query_timing: list[dict] = []
+
+    limit = search_k if search_k is not None else top_k
+
+    for q in queries:
+        q_timing: dict = {}
+        results = retrieve(
+            query=q,
+            embedding_model=embedding_model,
+            vector_store=vector_store,
+            top_k=limit,
+            search_k=search_k,
+            sparse_embedding_model=sparse_embedding_model,
+            bm25_index=bm25_index,
+            hybrid_alpha=hybrid_alpha,
+            fusion=fusion,
+            rrf_k=rrf_k,
+            timing=q_timing,
+        )
+        all_results.append(results)
+        per_query_timing.append(q_timing)
+
+    merged = _merge_multi_query_results(all_results, top_k, rrf_k)
+
+    if timing is not None:
+        timing["multi_query_count"] = len(queries)
+        timing["per_query_timing"] = per_query_timing
+        timing["total_s"] = time.perf_counter() - total_start
+
+    return merged
+
+
+def _merge_multi_query_results(
+    all_results: list[list[SearchResult]],
+    limit: int,
+    k: int = 60,
+) -> list[SearchResult]:
+    """Merge results from multiple queries using RRF."""
+    scores: dict[int, float] = defaultdict(float)
+    results_by_id: dict[int, SearchResult] = {}
+
+    for results in all_results:
+        for rank, result in enumerate(results, start=1):
+            if result.id is None:
+                continue
+            scores[result.id] += 1.0 / (k + rank)
+            if result.id not in results_by_id:
+                results_by_id[result.id] = result
+
+    merged = []
+    for chunk_id, score in scores.items():
+        result = results_by_id[chunk_id]
+        merged.append(
+            SearchResult(
+                text=result.text,
+                metadata=result.metadata,
+                score=score,
+                id=chunk_id,
+            )
+        )
+
+    merged.sort(key=lambda x: x.score, reverse=True)
+    return merged[:limit]

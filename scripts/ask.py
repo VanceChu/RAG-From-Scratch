@@ -15,6 +15,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from rag_core.answer import answer_question
 from rag_core.config import (
+    DEFAULT_BM25_DIR,
     DEFAULT_COLLECTION,
     DEFAULT_COLLECTION_RAW,
     DEFAULT_EMBEDDING_API_KEY,
@@ -23,34 +24,36 @@ from rag_core.config import (
     DEFAULT_EMBEDDING_ENDPOINT,
     DEFAULT_EMBEDDING_MODEL,
     DEFAULT_EMBEDDING_PROVIDER,
-    DEFAULT_VOLC_API_BASE_URL,
-    DEFAULT_VOLC_API_KEY,
     DEFAULT_ENABLE_BM25,
+    DEFAULT_ENABLE_QUERY_REWRITE,
     DEFAULT_ENABLE_SPARSE,
+    DEFAULT_FUSION,
+    DEFAULT_HISTORY_TURNS,
+    DEFAULT_HYBRID_ALPHA,
     DEFAULT_INDEX_EF_CONSTRUCTION,
     DEFAULT_INDEX_M,
     DEFAULT_INDEX_NLIST,
     DEFAULT_INDEX_TYPE,
-    DEFAULT_BM25_DIR,
-    DEFAULT_HYBRID_ALPHA,
-    DEFAULT_HISTORY_TURNS,
     DEFAULT_INTERACTIVE,
     DEFAULT_MILVUS_URI,
     DEFAULT_OPENAI_MODEL,
     DEFAULT_RERANK_ENABLED,
     DEFAULT_RERANK_MODEL,
     DEFAULT_RERANK_TOP_K,
+    DEFAULT_REWRITE_STRATEGIES,
     DEFAULT_RRF_K,
     DEFAULT_SEARCH_K,
     DEFAULT_STREAM,
     DEFAULT_TOP_K,
-    DEFAULT_FUSION,
+    DEFAULT_VOLC_API_BASE_URL,
+    DEFAULT_VOLC_API_KEY,
     resolve_collection_name,
 )
 from rag_core.embeddings import EmbeddingModel
 from rag_core.llm import OpenAIChatLLM
+from rag_core.query_rewriter import ConversationTurn, RewriteResult, RewriteStrategy
 from rag_core.rerank import Reranker
-from rag_core.retriever import retrieve
+from rag_core.retriever import retrieve, retrieve_with_rewrite
 from rag_core.vector_store import SearchResult, VectorStore
 
 
@@ -94,6 +97,8 @@ def _print_ask_overview(
     enable_sparse: bool,
     enable_bm25: bool,
     bm25_path: Path | None,
+    enable_rewrite: bool = True,
+    rewrite_strategies: str = "contextual",
 ) -> None:
     print("Ask configuration:")
     print(f"- collection: {collection_name}")
@@ -121,6 +126,9 @@ def _print_ask_overview(
         print(f"- hybrid_alpha: {hybrid_alpha}")
     print(f"- enable_sparse: {enable_sparse}")
     print(f"- enable_bm25: {enable_bm25}")
+    print(f"- enable_rewrite: {enable_rewrite}")
+    if enable_rewrite:
+        print(f"- rewrite_strategies: {rewrite_strategies}")
 
     print("\nInputs:")
     print(f"- collection: {collection_name}")
@@ -483,6 +491,17 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_HYBRID_ALPHA,
         help="Dense weight for hybrid search (0.0=BM25/sparse, 1.0=dense).",
     )
+    parser.add_argument(
+        "--enable-rewrite",
+        action=argparse.BooleanOptionalAction,
+        default=DEFAULT_ENABLE_QUERY_REWRITE,
+        help="Enable query rewriting for better retrieval (default: True).",
+    )
+    parser.add_argument(
+        "--rewrite-strategies",
+        default=DEFAULT_REWRITE_STRATEGIES,
+        help="Comma-separated list of rewrite strategies: contextual,expansion,hyde,decomposition,step_back.",
+    )
     return parser.parse_args()
 
 
@@ -513,7 +532,7 @@ def _answer_once(
     top_k: int,
     search_k: int,
     rerank_top_k: int,
-    history: list[tuple[str, str]],
+    history: list[ConversationTurn],
     history_turns: int,
     stream: bool,
     on_token: Callable[[str], None] | None,
@@ -522,28 +541,59 @@ def _answer_once(
     hybrid_alpha: float = 0.5,
     fusion: str = "weighted",
     rrf_k: int = 60,
-) -> tuple[str | None, list[SearchResult], dict]:
+    enable_rewrite: bool = True,
+    rewrite_strategies: list[str] | None = None,
+) -> tuple[str | None, list[SearchResult], dict, RewriteResult | None]:
     timing: dict = {}
     retrieve_timing: dict = {}
     total_start = time.perf_counter()
-    results = retrieve(
-        query=query,
-        embedding_model=embedding_model,
-        vector_store=vector_store,
-        top_k=top_k,
-        search_k=search_k,
-        sparse_embedding_model=sparse_embedding_model,
-        bm25_index=bm25_index,
-        hybrid_alpha=hybrid_alpha,
-        fusion=fusion,
-        rrf_k=rrf_k,
-        timing=retrieve_timing,
-    )
+
+    rewrite_result: RewriteResult | None = None
+    generation_query = query
+
+    if enable_rewrite:
+        results, rewrite_result = retrieve_with_rewrite(
+            query=query,
+            embedding_model=embedding_model,
+            vector_store=vector_store,
+            top_k=top_k,
+            llm=llm,
+            conversation_history=history if history else None,
+            enable_rewrite=True,
+            rewrite_strategies=rewrite_strategies,
+            search_k=search_k,
+            sparse_embedding_model=sparse_embedding_model,
+            bm25_index=bm25_index,
+            hybrid_alpha=hybrid_alpha,
+            fusion=fusion,
+            rrf_k=rrf_k,
+            timing=retrieve_timing,
+        )
+    else:
+        results = retrieve(
+            query=query,
+            embedding_model=embedding_model,
+            vector_store=vector_store,
+            top_k=top_k,
+            search_k=search_k,
+            sparse_embedding_model=sparse_embedding_model,
+            bm25_index=bm25_index,
+            hybrid_alpha=hybrid_alpha,
+            fusion=fusion,
+            rrf_k=rrf_k,
+            timing=retrieve_timing,
+        )
+
     timing["retrieve"] = retrieve_timing
+
+    # Use the rewritten query for generation only when it is a safe
+    # contextual disambiguation of the user's intent.
+    if rewrite_result and rewrite_result.strategy == RewriteStrategy.CONTEXTUAL:
+        generation_query = rewrite_result.primary_query
 
     if reranker and results:
         rerank_start = time.perf_counter()
-        results = reranker.rerank(query, results, top_k=rerank_top_k)
+        results = reranker.rerank(generation_query, results, top_k=rerank_top_k)
         timing["rerank_s"] = time.perf_counter() - rerank_start
     else:
         results = results[:top_k]
@@ -552,21 +602,21 @@ def _answer_once(
     if not results:
         timing["llm_s"] = 0.0
         timing["total_s"] = time.perf_counter() - total_start
-        return None, [], timing
+        return None, [], timing, rewrite_result
 
     llm_start = time.perf_counter()
     answer = answer_question(
-        query,
+        generation_query,
         results,
         llm,
-        conversation_history=history,
+        conversation_history=history if history else None,
         history_turns=history_turns,
         stream=stream,
         on_token=on_token,
     )
     timing["llm_s"] = time.perf_counter() - llm_start
     timing["total_s"] = time.perf_counter() - total_start
-    return answer, results, timing
+    return answer, results, timing, rewrite_result
 
 
 def main() -> None:
@@ -650,6 +700,8 @@ def main() -> None:
         enable_sparse=args.enable_sparse,
         enable_bm25=args.enable_bm25,
         bm25_path=bm25_path,
+        enable_rewrite=args.enable_rewrite,
+        rewrite_strategies=args.rewrite_strategies,
     )
 
     if vector_store.collection.num_entities == 0:
@@ -660,7 +712,13 @@ def main() -> None:
     llm = OpenAIChatLLM(model=args.openai_model)
     reranker = Reranker(args.rerank_model) if args.rerank else None
     interactive_mode = args.interactive or not args.query
-    history: list[tuple[str, str]] = []
+    history: list[ConversationTurn] = []
+
+    rewrite_strategies = (
+        [s.strip() for s in args.rewrite_strategies.split(",") if s.strip()]
+        if isinstance(args.rewrite_strategies, str)
+        else args.rewrite_strategies
+    )
 
     def run_query(query: str) -> None:
         started_stream = False
@@ -672,7 +730,7 @@ def main() -> None:
                 started_stream = True
             print(token, end="", flush=True)
 
-        answer, results, timing = _answer_once(
+        answer, results, timing, rewrite_result = _answer_once(
             query=query,
             embedding_model=embedding_model,
             vector_store=vector_store,
@@ -690,7 +748,25 @@ def main() -> None:
             hybrid_alpha=args.hybrid_alpha,
             fusion=args.fusion,
             rrf_k=args.rrf_k,
+            enable_rewrite=args.enable_rewrite,
+            rewrite_strategies=rewrite_strategies,
         )
+
+        if rewrite_result:
+            rewritten_queries = rewrite_result.rewritten_queries
+            print("\nQuery rewrite:")
+            print(f"- strategy: {rewrite_result.strategy.value}")
+            print(f"- original: {query}")
+            if len(rewritten_queries) == 1:
+                rewritten = rewritten_queries[0]
+                if rewritten != query:
+                    print(f"- rewritten: {rewritten}")
+            else:
+                print("- rewritten queries:")
+                for index, rewritten in enumerate(rewritten_queries, start=1):
+                    primary_tag = " (primary)" if index == 1 else ""
+                    print(f"  {index}. {rewritten}{primary_tag}")
+
         if not results or answer is None:
             print("No relevant context found.")
             return
@@ -705,7 +781,7 @@ def main() -> None:
             print(answer)
         _print_evidence(results)
         _print_ask_timing(timing)
-        history.append((query, answer))
+        history.append(ConversationTurn(query=query, response=answer))
 
     if not interactive_mode and args.query:
         run_query(args.query)
