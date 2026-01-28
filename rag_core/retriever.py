@@ -159,7 +159,7 @@ def retrieve(
 
     with span(trace_ctx, "retrieve", metadata={"top_k": top_k, "search_k": search_k}) as retrieve_ctx:
         total_start = time.perf_counter()
-        with span(retrieve_ctx, "embed_query") as embed_ctx:
+        with span(retrieve_ctx, "embed_query"):
             embed_start = time.perf_counter()
             embedding = embedding_model.embed_query(query)
             embed_elapsed = time.perf_counter() - embed_start
@@ -190,9 +190,9 @@ def retrieve(
                 timing["dense_search_s"] = dense_elapsed
                 timing["dense_results"] = len(dense_results)
 
-    fusion_mode = (fusion or "weighted").strip().lower()
-    if fusion_mode not in {"weighted", "rrf", "dense"}:
-        raise ValueError(f"Unsupported fusion mode: {fusion}")
+        fusion_mode = (fusion or "weighted").strip().lower()
+        if fusion_mode not in {"weighted", "rrf", "dense"}:
+            raise ValueError(f"Unsupported fusion mode: {fusion}")
 
         if bm25_index and fusion_mode != "dense":
             with span(retrieve_ctx, "bm25_search", metadata={"limit": limit}):
