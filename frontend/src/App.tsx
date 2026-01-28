@@ -13,6 +13,8 @@ type Message = {
   role: "user" | "assistant";
   content: string;
   citations?: string[];
+  traceId?: string;
+  evaluation?: Record<string, number>;
   timestamp: string;
 };
 
@@ -60,6 +62,11 @@ function formatNow(): string {
   return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
+function formatScore(value: number) {
+  if (Number.isNaN(value)) return "n/a";
+  return value.toFixed(3);
+}
+
 function InfoTip({ text }: InfoTipProps) {
   return (
     <span
@@ -94,6 +101,7 @@ export default function App() {
   const [apiBaseUrl, setApiBaseUrl] = useState(API_BASE);
   const [useMock, setUseMock] = useState(USE_MOCK);
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
+  const [copiedTraceId, setCopiedTraceId] = useState<string | null>(null);
 
   const chatTitle = useMemo(() => {
     return selectedKb ? `Conversation · ${selectedKb.name}` : "Conversation";
@@ -109,6 +117,17 @@ export default function App() {
     setSettings(DEFAULT_SETTINGS);
     setApiBaseUrl(API_BASE);
     setUseMock(USE_MOCK);
+  };
+
+  const handleCopyTrace = async (traceId?: string) => {
+    if (!traceId) return;
+    try {
+      await navigator.clipboard.writeText(traceId);
+      setCopiedTraceId(traceId);
+      setTimeout(() => setCopiedTraceId(null), 1500);
+    } catch (error) {
+      window.prompt("Copy Trace ID:", traceId);
+    }
   };
 
   const handleSend = async () => {
@@ -136,6 +155,8 @@ export default function App() {
         role: "assistant",
         content: response.answer,
         citations: response.citations,
+        traceId: response.traceId,
+        evaluation: response.evaluation,
         timestamp: formatNow()
       };
       setMessages((prev) => [...prev, assistantMessage]);
@@ -249,6 +270,33 @@ export default function App() {
                           {cite}
                         </span>
                       ))}
+                    </div>
+                  )}
+                  {(message.traceId || message.evaluation) && (
+                    <div className="trace-meta">
+                      {message.traceId && (
+                        <div className="trace-actions">
+                          <span className="chip trace-chip" title={message.traceId}>
+                            Trace: {message.traceId}
+                          </span>
+                          <button
+                            type="button"
+                            className="chip trace-copy"
+                            onClick={() => handleCopyTrace(message.traceId)}
+                          >
+                            {copiedTraceId === message.traceId ? "Copied" : "Copy"}
+                          </button>
+                        </div>
+                      )}
+                      {message.evaluation && (
+                        <div className="eval-group">
+                          {Object.entries(message.evaluation).map(([key, value]) => (
+                            <span key={key} className="chip eval-chip">
+                              {key}: {formatScore(value)}
+                            </span>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   )}
                 </article>
@@ -724,6 +772,39 @@ export default function App() {
                 </details>
 
                 <details className="accordion">
+                  <summary>Evaluation</summary>
+                  <div className="form-grid">
+                    <label className="toggle">
+                      <input
+                        type="checkbox"
+                        checked={settings.enableEvaluation}
+                        onChange={(event) => updateSetting("enableEvaluation", event.target.checked)}
+                      />
+                      <span className="toggle-text">Enable RAGAS evaluation</span>
+                      <InfoTip text="Definition: Run RAGAS metrics after each response.\nImpact: Adds latency and LLM cost.\nTypical: off in production, on for QA.\nUnits: boolean." />
+                    </label>
+                    <label className="field">
+                      <FieldLabel
+                        text="Eval sample rate"
+                        tip="Definition: Probability for automatic evaluation.\nImpact: Higher = more cost/latency.\nTypical: 0.0-0.2.\nUnits: ratio (0-1)."
+                      />
+                      <input
+                        className="input"
+                        type="number"
+                        min={0}
+                        max={1}
+                        step={0.01}
+                        value={settings.evalSampleRate}
+                        onChange={(event) => updateSetting("evalSampleRate", Number(event.target.value))}
+                      />
+                    </label>
+                    <p className="hint">
+                      Evaluation scores and trace IDs will appear on each answer card.
+                    </p>
+                  </div>
+                </details>
+
+                <details className="accordion">
                   <summary>Ingest</summary>
                   <div className="form-grid">
                     <label className="field">
@@ -786,6 +867,13 @@ async function mockAnswer(query: string) {
   await new Promise((resolve) => setTimeout(resolve, 800));
   return {
     answer: `Mock answer: I searched the index for "${query}" and found 5 relevant chunks. Connect the API to get real citations.`,
-    citations: ["chunk-01", "chunk-04", "chunk-07"]
+    citations: ["chunk-01", "chunk-04", "chunk-07"],
+    traceId: "mock-trace-001",
+    evaluation: {
+      faithfulness: 0.82,
+      answer_relevancy: 0.78,
+      context_precision: 0.71,
+      context_recall: 0.66,
+    }
   };
 }

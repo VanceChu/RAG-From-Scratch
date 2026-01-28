@@ -22,6 +22,7 @@ from rag_core.query_rewriter import (
     RewriteResult,
     RewriteStrategy,
 )
+from rag_core.observability import TraceContext, span
 from rag_core.sparse_embedding import SparseEmbeddingModel
 from rag_core.vector_store import SearchResult, VectorStore
 
@@ -149,78 +150,85 @@ def retrieve(
     fusion: str = "weighted",
     rrf_k: int = 60,
     timing: dict | None = None,
+    trace_ctx: TraceContext | None = None,
 ) -> list[SearchResult]:
     if not query.strip():
         return []
     if timing is not None:
         timing.clear()
 
-    total_start = time.perf_counter()
-    embed_start = time.perf_counter()
-    embedding = embedding_model.embed_query(query)
-    embed_elapsed = time.perf_counter() - embed_start
-    if timing is not None:
-        timing["embed_query_s"] = embed_elapsed
+    with span(trace_ctx, "retrieve", metadata={"top_k": top_k, "search_k": search_k}) as retrieve_ctx:
+        total_start = time.perf_counter()
+        with span(retrieve_ctx, "embed_query") as embed_ctx:
+            embed_start = time.perf_counter()
+            embedding = embedding_model.embed_query(query)
+            embed_elapsed = time.perf_counter() - embed_start
+            if timing is not None:
+                timing["embed_query_s"] = embed_elapsed
 
-    sparse_vector = None
-    if sparse_embedding_model and not bm25_index:
-        # APISparseEmbeddingModel takes a list of texts
-        sparse_vectors = sparse_embedding_model.embed_sparse([query])
-        if sparse_vectors and sparse_vectors[0]:
-            sparse_vector = sparse_vectors[0]
-    elif sparse_embedding_model and bm25_index:
-        logger.warning("BM25 index enabled; ignoring sparse embedding model.")
+        sparse_vector = None
+        if sparse_embedding_model and not bm25_index:
+            with span(retrieve_ctx, "sparse_embed"):
+                # APISparseEmbeddingModel takes a list of texts
+                sparse_vectors = sparse_embedding_model.embed_sparse([query])
+                if sparse_vectors and sparse_vectors[0]:
+                    sparse_vector = sparse_vectors[0]
+        elif sparse_embedding_model and bm25_index:
+            logger.warning("BM25 index enabled; ignoring sparse embedding model.")
 
-    limit = search_k if search_k is not None else top_k
-    dense_start = time.perf_counter()
-    dense_results = vector_store.search(
-        embedding,
-        limit=limit,
-        sparse_vector=sparse_vector,
-        hybrid_alpha=hybrid_alpha,
-    )
-    dense_elapsed = time.perf_counter() - dense_start
-    if timing is not None:
-        timing["dense_search_s"] = dense_elapsed
-        timing["dense_results"] = len(dense_results)
+        limit = search_k if search_k is not None else top_k
+        with span(retrieve_ctx, "dense_search", metadata={"limit": limit}):
+            dense_start = time.perf_counter()
+            dense_results = vector_store.search(
+                embedding,
+                limit=limit,
+                sparse_vector=sparse_vector,
+                hybrid_alpha=hybrid_alpha,
+            )
+            dense_elapsed = time.perf_counter() - dense_start
+            if timing is not None:
+                timing["dense_search_s"] = dense_elapsed
+                timing["dense_results"] = len(dense_results)
 
     fusion_mode = (fusion or "weighted").strip().lower()
     if fusion_mode not in {"weighted", "rrf", "dense"}:
         raise ValueError(f"Unsupported fusion mode: {fusion}")
 
-    if bm25_index and fusion_mode != "dense":
-        bm25_start = time.perf_counter()
-        bm25_results = bm25_index.search(query, limit=limit)
-        bm25_elapsed = time.perf_counter() - bm25_start
-        if timing is not None:
-            timing["bm25_search_s"] = bm25_elapsed
-            timing["bm25_results"] = len(bm25_results)
-        merge_start = time.perf_counter()
-        if fusion_mode == "rrf":
-            merged = _merge_rrf(
-                dense_results=dense_results,
-                bm25_results=bm25_results,
-                limit=limit,
-                k=rrf_k,
-            )
-        else:
-            merged = _merge_dense_bm25(
-                dense_results=dense_results,
-                bm25_results=bm25_results,
-                dense_weight=hybrid_alpha,
-                metric_type=vector_store.metric_type,
-                limit=limit,
-            )
-        merge_elapsed = time.perf_counter() - merge_start
-        if timing is not None:
-            timing["merge_s"] = merge_elapsed
-            timing["total_s"] = time.perf_counter() - total_start
-            timing["merged_results"] = len(merged)
-        return merged
+        if bm25_index and fusion_mode != "dense":
+            with span(retrieve_ctx, "bm25_search", metadata={"limit": limit}):
+                bm25_start = time.perf_counter()
+                bm25_results = bm25_index.search(query, limit=limit)
+                bm25_elapsed = time.perf_counter() - bm25_start
+                if timing is not None:
+                    timing["bm25_search_s"] = bm25_elapsed
+                    timing["bm25_results"] = len(bm25_results)
+            with span(retrieve_ctx, "fusion", metadata={"mode": fusion_mode}):
+                merge_start = time.perf_counter()
+                if fusion_mode == "rrf":
+                    merged = _merge_rrf(
+                        dense_results=dense_results,
+                        bm25_results=bm25_results,
+                        limit=limit,
+                        k=rrf_k,
+                    )
+                else:
+                    merged = _merge_dense_bm25(
+                        dense_results=dense_results,
+                        bm25_results=bm25_results,
+                        dense_weight=hybrid_alpha,
+                        metric_type=vector_store.metric_type,
+                        limit=limit,
+                    )
+                merge_elapsed = time.perf_counter() - merge_start
+                if timing is not None:
+                    timing["merge_s"] = merge_elapsed
+                    timing["total_s"] = time.perf_counter() - total_start
+                    timing["merged_results"] = len(merged)
+            return merged
 
-    if timing is not None:
-        timing["total_s"] = time.perf_counter() - total_start
-    return dense_results
+        if timing is not None:
+            timing["total_s"] = time.perf_counter() - total_start
+        return dense_results
 
 
 def retrieve_with_rewrite(
@@ -239,6 +247,7 @@ def retrieve_with_rewrite(
     fusion: str = "weighted",
     rrf_k: int = 60,
     timing: dict | None = None,
+    trace_ctx: TraceContext | None = None,
 ) -> tuple[list[SearchResult], RewriteResult | None]:
     """
     Retrieve with optional query rewriting.
@@ -270,59 +279,66 @@ def retrieve_with_rewrite(
     rewrite_result: RewriteResult | None = None
 
     if enable_rewrite and llm:
-        rewrite_start = time.perf_counter()
+        with span(trace_ctx, "query_rewrite", metadata={"strategies": rewrite_strategies}) as rewrite_ctx:
+            rewrite_start = time.perf_counter()
 
-        strategies = None
-        if rewrite_strategies:
-            strategies = [
-                RewriteStrategy(s.strip())
-                for s in rewrite_strategies
-                if s.strip() in [e.value for e in RewriteStrategy]
-            ]
+            strategies = None
+            if rewrite_strategies:
+                strategies = [
+                    RewriteStrategy(s.strip())
+                    for s in rewrite_strategies
+                    if s.strip() in [e.value for e in RewriteStrategy]
+                ]
 
-        pipeline = QueryRewriterPipeline(
-            llm=llm,
-            strategies=strategies,
-            enable_contextual=not strategies,
-            enable_expansion=DEFAULT_ENABLE_QUERY_EXPANSION if not strategies else False,
-            enable_hyde=DEFAULT_ENABLE_HYDE if not strategies else False,
-            enable_decomposition=DEFAULT_ENABLE_QUERY_DECOMPOSITION if not strategies else False,
-            enable_step_back=DEFAULT_ENABLE_STEP_BACK if not strategies else False,
-        )
-
-        rewrite_result = pipeline.rewrite(query, conversation_history)
-
-        if timing is not None:
-            timing["rewrite_s"] = time.perf_counter() - rewrite_start
-            timing["rewrite_strategy"] = rewrite_result.strategy.value
-            timing["original_query"] = query
-            timing["rewritten_queries"] = rewrite_result.rewritten_queries
-
-        rewritten_queries = rewrite_result.rewritten_queries
-
-        if len(rewritten_queries) > 1:
-            logger.info(
-                f"Multi-query rewrite: '{query}' -> {len(rewritten_queries)} queries"
+            pipeline = QueryRewriterPipeline(
+                llm=llm,
+                strategies=strategies,
+                enable_contextual=not strategies,
+                enable_expansion=DEFAULT_ENABLE_QUERY_EXPANSION if not strategies else False,
+                enable_hyde=DEFAULT_ENABLE_HYDE if not strategies else False,
+                enable_decomposition=DEFAULT_ENABLE_QUERY_DECOMPOSITION if not strategies else False,
+                enable_step_back=DEFAULT_ENABLE_STEP_BACK if not strategies else False,
             )
-            results = retrieve_multi_query(
-                queries=rewritten_queries,
-                embedding_model=embedding_model,
-                vector_store=vector_store,
-                top_k=top_k,
-                search_k=search_k,
-                sparse_embedding_model=sparse_embedding_model,
-                bm25_index=bm25_index,
-                hybrid_alpha=hybrid_alpha,
-                fusion=fusion,
-                rrf_k=rrf_k,
-                timing=timing,
-            )
-            return results, rewrite_result
-        else:
-            effective_query = rewrite_result.primary_query
-            logger.info(f"Query rewrite: '{query}' -> '{effective_query}'")
+
+            previous_ctx = getattr(llm, "trace_ctx", None)
+            try:
+                llm.trace_ctx = rewrite_ctx
+                rewrite_result = pipeline.rewrite(query, conversation_history)
+            finally:
+                llm.trace_ctx = previous_ctx
+
             if timing is not None:
-                timing["rewritten_query"] = effective_query
+                timing["rewrite_s"] = time.perf_counter() - rewrite_start
+                timing["rewrite_strategy"] = rewrite_result.strategy.value
+                timing["original_query"] = query
+                timing["rewritten_queries"] = rewrite_result.rewritten_queries
+
+            rewritten_queries = rewrite_result.rewritten_queries
+
+            if len(rewritten_queries) > 1:
+                logger.info(
+                    f"Multi-query rewrite: '{query}' -> {len(rewritten_queries)} queries"
+                )
+                results = retrieve_multi_query(
+                    queries=rewritten_queries,
+                    embedding_model=embedding_model,
+                    vector_store=vector_store,
+                    top_k=top_k,
+                    search_k=search_k,
+                    sparse_embedding_model=sparse_embedding_model,
+                    bm25_index=bm25_index,
+                    hybrid_alpha=hybrid_alpha,
+                    fusion=fusion,
+                    rrf_k=rrf_k,
+                    timing=timing,
+                    trace_ctx=rewrite_ctx,
+                )
+                return results, rewrite_result
+            else:
+                effective_query = rewrite_result.primary_query
+                logger.info(f"Query rewrite: '{query}' -> '{effective_query}'")
+                if timing is not None:
+                    timing["rewritten_query"] = effective_query
     else:
         effective_query = query
 
@@ -338,6 +354,7 @@ def retrieve_with_rewrite(
         fusion=fusion,
         rrf_k=rrf_k,
         timing=timing,
+        trace_ctx=trace_ctx,
     )
 
     return results, rewrite_result
@@ -355,6 +372,7 @@ def retrieve_multi_query(
     fusion: str = "weighted",
     rrf_k: int = 60,
     timing: dict | None = None,
+    trace_ctx: TraceContext | None = None,
 ) -> list[SearchResult]:
     """
     Retrieve using multiple query variants and merge results via RRF.
@@ -380,38 +398,40 @@ def retrieve_multi_query(
     if not queries:
         return []
 
-    total_start = time.perf_counter()
-    all_results: list[list[SearchResult]] = []
-    per_query_timing: list[dict] = []
+    with span(trace_ctx, "retrieve_multi_query", metadata={"query_count": len(queries)}):
+        total_start = time.perf_counter()
+        all_results: list[list[SearchResult]] = []
+        per_query_timing: list[dict] = []
 
-    limit = search_k if search_k is not None else top_k
+        limit = search_k if search_k is not None else top_k
 
-    for q in queries:
-        q_timing: dict = {}
-        results = retrieve(
-            query=q,
-            embedding_model=embedding_model,
-            vector_store=vector_store,
-            top_k=limit,
-            search_k=search_k,
-            sparse_embedding_model=sparse_embedding_model,
-            bm25_index=bm25_index,
-            hybrid_alpha=hybrid_alpha,
-            fusion=fusion,
-            rrf_k=rrf_k,
-            timing=q_timing,
-        )
-        all_results.append(results)
-        per_query_timing.append(q_timing)
+        for q in queries:
+            q_timing: dict = {}
+            results = retrieve(
+                query=q,
+                embedding_model=embedding_model,
+                vector_store=vector_store,
+                top_k=limit,
+                search_k=search_k,
+                sparse_embedding_model=sparse_embedding_model,
+                bm25_index=bm25_index,
+                hybrid_alpha=hybrid_alpha,
+                fusion=fusion,
+                rrf_k=rrf_k,
+                timing=q_timing,
+                trace_ctx=trace_ctx,
+            )
+            all_results.append(results)
+            per_query_timing.append(q_timing)
 
-    merged = _merge_multi_query_results(all_results, top_k, rrf_k)
+        merged = _merge_multi_query_results(all_results, top_k, rrf_k)
 
-    if timing is not None:
-        timing["multi_query_count"] = len(queries)
-        timing["per_query_timing"] = per_query_timing
-        timing["total_s"] = time.perf_counter() - total_start
+        if timing is not None:
+            timing["multi_query_count"] = len(queries)
+            timing["per_query_timing"] = per_query_timing
+            timing["total_s"] = time.perf_counter() - total_start
 
-    return merged
+        return merged
 
 
 def _merge_multi_query_results(

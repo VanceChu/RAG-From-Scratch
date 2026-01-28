@@ -382,6 +382,48 @@ h2 {
   gap: 8px;
 }
 
+.trace-meta {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.trace-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.trace-copy {
+  background: var(--surface-1);
+  cursor: pointer;
+  transition: background 0.2s ease, color 0.2s ease;
+}
+
+.trace-copy:hover {
+  background: var(--accent-bg);
+  color: var(--accent-text);
+}
+
+.eval-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.trace-chip {
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+    "Liberation Mono", "Courier New", monospace;
+  letter-spacing: 0.02em;
+}
+
+.eval-chip {
+  color: var(--muted);
+}
+
 .chip {
   border: 1px solid var(--border);
   border-radius: 999px;

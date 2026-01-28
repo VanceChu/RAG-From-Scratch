@@ -36,6 +36,10 @@ from rag_core.config import (
     DEFAULT_ENABLE_BM25,
     DEFAULT_ENABLE_QUERY_REWRITE,
     DEFAULT_ENABLE_SPARSE,
+    DEFAULT_EVAL_OPENAI_API_KEY,
+    DEFAULT_EVAL_OPENAI_BASE_URL,
+    DEFAULT_EVAL_OPENAI_MODEL,
+    DEFAULT_EVAL_SAMPLE_RATE,
     DEFAULT_FUSION,
     DEFAULT_HISTORY_TURNS,
     DEFAULT_HYBRID_ALPHA,
@@ -60,9 +64,11 @@ from rag_core.config import (
     resolve_collection_name,
 )
 from rag_core.embeddings import EmbeddingModel
+from rag_core.evaluation import EvaluationConfig, evaluate_single
 from rag_core.ingest import ingest_documents
 from rag_core.ingest_state import IngestState
 from rag_core.llm import OpenAIChatLLM
+from rag_core.observability import log_score, span, trace, update_trace_metadata
 from rag_core.query_rewriter import ConversationTurn, RewriteResult, RewriteStrategy
 from rag_core.rerank import Reranker
 from rag_core.retriever import retrieve, retrieve_with_rewrite
@@ -81,6 +87,8 @@ class ConversationTurnModel(BaseModel):
 
 class QueryRequest(BaseModel):
     query: str = Field(..., min_length=1)
+    user_id: str | None = None
+    session_id: str | None = None
     collection: str | None = None
     collection_raw: bool = DEFAULT_COLLECTION_RAW
     milvus_uri: str = DEFAULT_MILVUS_URI
@@ -112,6 +120,11 @@ class QueryRequest(BaseModel):
         default_factory=lambda: DEFAULT_REWRITE_STRATEGIES.split(",")
     )
     conversation_history: list[ConversationTurnModel] | None = None
+    enable_evaluation: bool = False
+    eval_sample_rate: float = DEFAULT_EVAL_SAMPLE_RATE
+    eval_openai_model: str = DEFAULT_EVAL_OPENAI_MODEL
+    eval_openai_api_key: str = DEFAULT_EVAL_OPENAI_API_KEY
+    eval_openai_base_url: str = DEFAULT_EVAL_OPENAI_BASE_URL
 
 
 class RewriteInfo(BaseModel):
@@ -130,6 +143,8 @@ class QueryResponse(BaseModel):
     evidence: list[dict[str, Any]]
     timing: dict[str, Any]
     rewrite_info: RewriteInfo | None = None
+    evaluation: dict[str, float] | None = None
+    trace_id: str | None = None
 
 
 def _ensure_local_milvus_parent(uri: str) -> None:
@@ -244,151 +259,199 @@ def query(request: QueryRequest) -> QueryResponse:
     _ensure_local_milvus_parent(request.milvus_uri)
     connections.connect(alias="default", uri=request.milvus_uri)
 
-    embedding_model = _build_embedding_model(
-        provider=request.embedding_provider,
-        model=request.embedding_model,
-        base_url=request.embedding_base_url,
-        endpoint=request.embedding_endpoint,
-        embedding_dim=request.embedding_dim,
-    )
-
-    vector_store = _build_vector_store(
-        uri=request.milvus_uri,
-        collection_name=collection_name,
-        embedding_dim=embedding_model.dimension,
-        index_type=request.index_type,
-        index_nlist=request.index_nlist,
-        index_m=request.index_m,
-        index_ef_construction=request.index_ef_construction,
-    )
-
-    if vector_store.collection.num_entities == 0:
-        raise HTTPException(status_code=404, detail="Collection is empty. Run ingest first.")
-
-    sparse_model = None
-    if request.enable_sparse:
-        sparse_model = APISparseEmbeddingModel()
-
-    bm25_index = None
-    if request.enable_bm25:
-        bm25_index = BM25Index.load(collection=collection_name, base_dir=DEFAULT_BM25_DIR)
-
-    llm = OpenAIChatLLM(model=request.openai_model)
-
-    conversation_history: list[ConversationTurn] | None = None
-    if request.conversation_history:
-        conversation_history = [
-            ConversationTurn(query=turn.query, response=turn.response)
-            for turn in request.conversation_history
-        ]
-
-    timing: dict[str, Any] = {}
-    retrieve_timing: dict[str, Any] = {}
-    total_start = time.perf_counter()
-
-    rewrite_info_response: RewriteInfo | None = None
-    rewrite_result: RewriteResult | None = None
-
-    if request.enable_rewrite:
-        results, rewrite_result = retrieve_with_rewrite(
-            query=request.query,
-            embedding_model=embedding_model,
-            vector_store=vector_store,
-            top_k=request.top_k,
-            llm=llm,
-            conversation_history=conversation_history,
-            enable_rewrite=True,
-            rewrite_strategies=request.rewrite_strategies,
-            search_k=request.search_k,
-            sparse_embedding_model=sparse_model,
-            bm25_index=bm25_index,
-            hybrid_alpha=request.hybrid_alpha,
-            fusion=request.fusion,
-            rrf_k=request.rrf_k,
-            timing=retrieve_timing,
+    with trace(
+        name="rag_query",
+        user_id=request.user_id,
+        session_id=request.session_id,
+        metadata={"query": request.query, "collection": collection_name},
+    ) as trace_ctx:
+        embedding_model = _build_embedding_model(
+            provider=request.embedding_provider,
+            model=request.embedding_model,
+            base_url=request.embedding_base_url,
+            endpoint=request.embedding_endpoint,
+            embedding_dim=request.embedding_dim,
         )
-        if rewrite_result:
-            rewrite_info_response = RewriteInfo(
-                original_query=rewrite_result.original_query,
-                rewritten_query=rewrite_result.primary_query,
-                rewritten_queries=rewrite_result.rewritten_queries,
-                strategy=rewrite_result.strategy.value,
-                metadata=rewrite_result.metadata,
+
+        vector_store = _build_vector_store(
+            uri=request.milvus_uri,
+            collection_name=collection_name,
+            embedding_dim=embedding_model.dimension,
+            index_type=request.index_type,
+            index_nlist=request.index_nlist,
+            index_m=request.index_m,
+            index_ef_construction=request.index_ef_construction,
+        )
+
+        if vector_store.collection.num_entities == 0:
+            raise HTTPException(
+                status_code=404, detail="Collection is empty. Run ingest first."
             )
-    else:
-        results = retrieve(
-            query=request.query,
-            embedding_model=embedding_model,
-            vector_store=vector_store,
-            top_k=request.top_k,
-            search_k=request.search_k,
-            sparse_embedding_model=sparse_model,
-            bm25_index=bm25_index,
-            hybrid_alpha=request.hybrid_alpha,
-            fusion=request.fusion,
-            rrf_k=request.rrf_k,
-            timing=retrieve_timing,
-        )
 
-    timing["retrieve"] = retrieve_timing
+        sparse_model = APISparseEmbeddingModel() if request.enable_sparse else None
+        bm25_index = None
+        if request.enable_bm25:
+            bm25_index = BM25Index.load(
+                collection=collection_name, base_dir=DEFAULT_BM25_DIR
+            )
 
-    # Use the rewritten query for generation only when it is a safe
-    # contextual disambiguation of the user's intent.
-    generation_query = request.query
-    if rewrite_result and rewrite_result.strategy == RewriteStrategy.CONTEXTUAL:
-        generation_query = rewrite_result.primary_query
+        llm = OpenAIChatLLM(model=request.openai_model, trace_ctx=trace_ctx)
 
-    if request.rerank and results:
-        reranker = Reranker(request.rerank_model)
-        rerank_start = time.perf_counter()
-        results = reranker.rerank(generation_query, results, top_k=request.rerank_top_k)
-        timing["rerank_s"] = time.perf_counter() - rerank_start
-    else:
-        results = results[: request.top_k]
-        timing["rerank_s"] = 0.0
+        conversation_history: list[ConversationTurn] | None = None
+        if request.conversation_history:
+            conversation_history = [
+                ConversationTurn(query=turn.query, response=turn.response)
+                for turn in request.conversation_history
+            ]
 
-    if not results:
+        timing: dict[str, Any] = {}
+        retrieve_timing: dict[str, Any] = {}
+        total_start = time.perf_counter()
+
+        rewrite_info_response: RewriteInfo | None = None
+        rewrite_result: RewriteResult | None = None
+
+        if request.enable_rewrite:
+            results, rewrite_result = retrieve_with_rewrite(
+                query=request.query,
+                embedding_model=embedding_model,
+                vector_store=vector_store,
+                top_k=request.top_k,
+                llm=llm,
+                conversation_history=conversation_history,
+                enable_rewrite=True,
+                rewrite_strategies=request.rewrite_strategies,
+                search_k=request.search_k,
+                sparse_embedding_model=sparse_model,
+                bm25_index=bm25_index,
+                hybrid_alpha=request.hybrid_alpha,
+                fusion=request.fusion,
+                rrf_k=request.rrf_k,
+                timing=retrieve_timing,
+                trace_ctx=trace_ctx,
+            )
+            if rewrite_result:
+                rewrite_info_response = RewriteInfo(
+                    original_query=rewrite_result.original_query,
+                    rewritten_query=rewrite_result.primary_query,
+                    rewritten_queries=rewrite_result.rewritten_queries,
+                    strategy=rewrite_result.strategy.value,
+                    metadata=rewrite_result.metadata,
+                )
+        else:
+            results = retrieve(
+                query=request.query,
+                embedding_model=embedding_model,
+                vector_store=vector_store,
+                top_k=request.top_k,
+                search_k=request.search_k,
+                sparse_embedding_model=sparse_model,
+                bm25_index=bm25_index,
+                hybrid_alpha=request.hybrid_alpha,
+                fusion=request.fusion,
+                rrf_k=request.rrf_k,
+                timing=retrieve_timing,
+                trace_ctx=trace_ctx,
+            )
+
+        timing["retrieve"] = retrieve_timing
+
+        # Use the rewritten query for generation only when it is a safe
+        # contextual disambiguation of the user's intent.
+        generation_query = request.query
+        if rewrite_result and rewrite_result.strategy == RewriteStrategy.CONTEXTUAL:
+            generation_query = rewrite_result.primary_query
+
+        if request.rerank and results:
+            reranker = Reranker(request.rerank_model)
+            with span(trace_ctx, "rerank", metadata={"top_k": request.rerank_top_k}):
+                rerank_start = time.perf_counter()
+                results = reranker.rerank(
+                    generation_query, results, top_k=request.rerank_top_k
+                )
+                timing["rerank_s"] = time.perf_counter() - rerank_start
+        else:
+            results = results[: request.top_k]
+            timing["rerank_s"] = 0.0
+
+        if not results:
+            timing["total_s"] = time.perf_counter() - total_start
+            return QueryResponse(
+                answer="No relevant context found.",
+                citations=[],
+                evidence=[],
+                timing=timing,
+                rewrite_info=rewrite_info_response,
+                trace_id=trace_ctx.trace_id,
+            )
+
+        with span(trace_ctx, "answer_generation") as gen_ctx:
+            previous_ctx = getattr(llm, "trace_ctx", None)
+            try:
+                llm.trace_ctx = gen_ctx
+                llm_start = time.perf_counter()
+                answer = answer_question(
+                    generation_query,
+                    results,
+                    llm,
+                    conversation_history=conversation_history,
+                    history_turns=request.history_turns,
+                    stream=False,
+                )
+                timing["llm_s"] = time.perf_counter() - llm_start
+            finally:
+                llm.trace_ctx = previous_ctx
         timing["total_s"] = time.perf_counter() - total_start
+
+        evidence = []
+        for result in results:
+            metadata = result.metadata or {}
+            evidence.append(
+                {
+                    "text": result.text,
+                    "score": result.score,
+                    "source": metadata.get("source", "unknown"),
+                    "section": metadata.get("section", "unknown"),
+                    "page": metadata.get("page", "n/a"),
+                }
+            )
+        citations = _build_citations(results)
+
+        evaluation_scores: dict[str, float] | None = None
+        do_eval = bool(request.enable_evaluation)
+        if not do_eval and request.eval_sample_rate and request.eval_sample_rate > 0:
+            do_eval = (uuid.uuid4().int % 10_000) / 10_000 < request.eval_sample_rate
+
+        if do_eval:
+            eval_config = EvaluationConfig(
+                openai_api_key=request.eval_openai_api_key or None,
+                openai_base_url=request.eval_openai_base_url or None,
+                openai_model=request.eval_openai_model or None,
+            )
+            try:
+                eval_result = evaluate_single(
+                    question=request.query,
+                    answer=answer,
+                    contexts=[r.text for r in results],
+                    ground_truth=None,
+                    config=eval_config,
+                )
+                evaluation_scores = eval_result.scores
+                for name, value in evaluation_scores.items():
+                    log_score(trace_ctx, name=f"ragas_{name}", value=value)
+                update_trace_metadata(trace_ctx, {"ragas_scores": evaluation_scores})
+            except Exception as exc:
+                timing["evaluation_error"] = str(exc)
+
         return QueryResponse(
-            answer="No relevant context found.",
-            citations=[],
-            evidence=[],
+            answer=answer,
+            citations=citations,
+            evidence=evidence,
             timing=timing,
             rewrite_info=rewrite_info_response,
+            evaluation=evaluation_scores,
+            trace_id=trace_ctx.trace_id,
         )
-
-    llm_start = time.perf_counter()
-    answer = answer_question(
-        generation_query,
-        results,
-        llm,
-        conversation_history=conversation_history,
-        history_turns=request.history_turns,
-        stream=False,
-    )
-    timing["llm_s"] = time.perf_counter() - llm_start
-    timing["total_s"] = time.perf_counter() - total_start
-
-    evidence = []
-    for result in results:
-        metadata = result.metadata or {}
-        evidence.append(
-            {
-                "text": result.text,
-                "score": result.score,
-                "source": metadata.get("source", "unknown"),
-                "section": metadata.get("section", "unknown"),
-                "page": metadata.get("page", "n/a"),
-            }
-        )
-    citations = _build_citations(results)
-    return QueryResponse(
-        answer=answer,
-        citations=citations,
-        evidence=evidence,
-        timing=timing,
-        rewrite_info=rewrite_info_response,
-    )
 
 
 @app.post("/ingest")

@@ -4,11 +4,15 @@ import type { Settings } from "../types/settings";
 type QueryResponse = {
   answer?: string;
   citations?: string[];
+  trace_id?: string;
+  evaluation?: Record<string, number>;
 };
 
 type QueryResult = {
   answer: string;
   citations: string[];
+  traceId?: string;
+  evaluation?: Record<string, number>;
 };
 
 function buildQueryPayload(query: string, settings: Settings): Record<string, unknown> {
@@ -38,6 +42,8 @@ function buildQueryPayload(query: string, settings: Settings): Record<string, un
     interactive: settings.interactive,
     openai_model: settings.openaiModel,
     history_turns: settings.historyTurns,
+    enable_evaluation: settings.enableEvaluation,
+    eval_sample_rate: settings.evalSampleRate,
   };
 
   if (settings.embeddingBaseUrl.trim()) {
@@ -93,6 +99,8 @@ export async function queryRag(
   return {
     answer: data.answer || "No answer returned.",
     citations: data.citations || [],
+    traceId: data.trace_id,
+    evaluation: data.evaluation,
   };
 }
 

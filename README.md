@@ -129,6 +129,14 @@ Environment variables are loaded from `.env` at project root (if present).
 - `RAG_STATE_DIR` (default: `data/index/ingest_state`)
 - `RAG_IMAGE_DIR` (default: `data/index/chunk_images`, images stored under `<base>/<collection>/`)
 - `RAG_BM25_DIR` (default: `data/index/bm25`)
+- `LANGFUSE_ENABLED` (default: `false`)
+- `LANGFUSE_PUBLIC_KEY` (default: empty)
+- `LANGFUSE_SECRET_KEY` (default: empty)
+- `LANGFUSE_HOST` (default: `https://cloud.langfuse.com`)
+- `RAG_EVAL_OPENAI_MODEL` (default: `gpt-5.1`)
+- `RAG_EVAL_OPENAI_API_KEY` (default: empty)
+- `RAG_EVAL_OPENAI_BASE_URL` (default: empty)
+- `RAG_EVAL_SAMPLE_RATE` (default: `0.0`)
 
 Chunk images are automatically isolated per collection under `RAG_IMAGE_DIR/<collection>/`.
 When the embedding provider/model differs from the defaults, the CLI automatically
@@ -218,6 +226,49 @@ Key flags:
 - `--index-ef-construction`: HNSW only
 - `--embedding-provider`: `sentence-transformers`, `openai`, or `volcengine`
 - `--embedding-model`: embedding model name
+
+## LangFuse + RAGAS (Observability + Evaluation)
+### 1) Enable LangFuse tracing
+Set the following in `.env`:
+```bash
+LANGFUSE_ENABLED=true
+LANGFUSE_PUBLIC_KEY=...
+LANGFUSE_SECRET_KEY=...
+LANGFUSE_HOST=https://cloud.langfuse.com
+```
+Start the API server and make a request. The response includes `trace_id` which is also shown in the UI:
+```bash
+conda run -n llm python scripts/api.py
+```
+
+### 2) Online evaluation (RAGAS scores in API responses)
+You can request a single evaluation or enable sampling:
+```json
+{
+  "query": "什么是RAG?",
+  "enable_evaluation": true
+}
+```
+Or sampling:
+```json
+{
+  "query": "什么是RAG?",
+  "eval_sample_rate": 0.1
+}
+```
+Scores are returned in `evaluation` and also written into LangFuse as scores + trace metadata.
+
+### 3) Batch evaluation CLI (RAGAS)
+Prepare a dataset (JSON or JSONL) and run:
+```bash
+conda run -n llm python scripts/evaluate.py \
+  --dataset data/eval/sample_dataset.jsonl \
+  --output data/eval/results.json \
+  --output-csv data/eval/results.csv \
+  --output-html data/eval/report.html \
+  --upload-langfuse
+```
+The HTML report provides a quick visual summary, while CSV/JSON are easy to analyze.
 - `--embedding-base-url`: base URL for OpenAI-compatible providers
 - `--embedding-endpoint`: embedding endpoint path (e.g. `embeddings/multimodal`)
 - `--embedding-dim`: required for unknown OpenAI models

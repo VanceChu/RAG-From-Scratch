@@ -29,6 +29,8 @@ export type Settings = {
   overlap: number;
   batchSize: number;
   reset: boolean;
+  enableEvaluation: boolean;
+  evalSampleRate: number;
 };
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -62,6 +64,8 @@ export const DEFAULT_SETTINGS: Settings = {
   overlap: 120,
   batchSize: 64,
   reset: false,
+  enableEvaluation: false,
+  evalSampleRate: 0,
 };
 
 export const PROVIDER_OPTIONS = [

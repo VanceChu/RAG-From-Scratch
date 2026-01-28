@@ -67,6 +67,8 @@ xxhash
 lark
 litellm
 langfuse
+ragas
+datasets
 dashscope
 zhipuai
 volcengine
